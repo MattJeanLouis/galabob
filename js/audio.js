@@ -7,6 +7,8 @@ const audioConfig = {
   currentNarration: null,
   musicList: [], // Sera rempli automatiquement
   narrationList: [], // Sera rempli automatiquement
+  playedMusicList: [], // Liste des musiques déjà jouées dans le cycle actuel
+  playedNarrationList: [], // Liste des narrations déjà jouées dans le cycle actuel
   originalMusicVolume: 0, // Pour restaurer le volume après la narration
   narrationPoints: 100, // Points gagnés à la fin d'une narration
   soundEnabled: false, // Indique si le son est activé par l'utilisateur
@@ -322,10 +324,33 @@ function playRandomMusic() {
     return;
   }
   
-  // Choisir une musique aléatoire différente de la musique actuelle
-  let availableMusic = audioConfig.musicList;
-  if (audioConfig.currentMusic && audioConfig.musicList.length > 1) {
-    availableMusic = audioConfig.musicList.filter(music => music !== audioConfig.currentMusic);
+  // Sélection de musique avec système de rotation équitable
+  let availableMusic = [];
+  
+  // Si toutes les musiques ont été jouées, réinitialiser la liste
+  if (audioConfig.playedMusicList.length >= audioConfig.musicList.length) {
+    console.log("Cycle de musiques terminé, réinitialisation");
+    audioConfig.playedMusicList = [];
+    // Garder la musique actuelle dans la liste des jouées pour éviter de la rejouer immédiatement
+    if (audioConfig.currentMusic) {
+      audioConfig.playedMusicList.push(audioConfig.currentMusic);
+    }
+  }
+  
+  // Filtrer les musiques non encore jouées dans ce cycle
+  availableMusic = audioConfig.musicList.filter(music => !audioConfig.playedMusicList.includes(music));
+  
+  // Si toutes les musiques ont été jouées (cas rare, potentiellement dû à des erreurs), réinitialiser
+  if (availableMusic.length === 0) {
+    console.log("Aucune musique disponible, réinitialisation de la liste");
+    audioConfig.playedMusicList = [];
+    // Mais toujours éviter de rejouer la musique actuelle
+    if (audioConfig.currentMusic) {
+      audioConfig.playedMusicList.push(audioConfig.currentMusic);
+      availableMusic = audioConfig.musicList.filter(music => music !== audioConfig.currentMusic);
+    } else {
+      availableMusic = audioConfig.musicList;
+    }
   }
   
   const randomIndex = Math.floor(Math.random() * availableMusic.length);
@@ -359,6 +384,12 @@ function playRandomMusic() {
       .then(() => {
         console.log("Musique démarrée avec succès:", musicPath);
         audioConfig.currentMusic = musicPath;
+        
+        // Ajouter la musique à la liste des musiques jouées
+        if (!audioConfig.playedMusicList.includes(musicPath)) {
+          audioConfig.playedMusicList.push(musicPath);
+          console.log(`Musique ajoutée à la liste des musiques jouées. Jouées: ${audioConfig.playedMusicList.length}/${audioConfig.musicList.length}`);
+        }
         
         // Appliquer un fondu d'entrée si l'option est activée
         if (audioConfig.useFadeEffects) {
@@ -429,11 +460,33 @@ function playRandomNarration(forceNew = false) {
     }
   }
   
-  // Choisir une narration aléatoire différente de la narration précédente si possible
-  let availableNarrations = audioConfig.narrationList;
-  if (audioConfig.currentNarration && audioConfig.narrationList.length > 1) {
-    availableNarrations = audioConfig.narrationList.filter(narration => narration !== audioConfig.currentNarration);
-    console.log(`Sélection parmi ${availableNarrations.length} narrations différentes de la narration actuelle`);
+  // Sélection de narration avec système de rotation équitable
+  let availableNarrations = [];
+  
+  // Si toutes les narrations ont été jouées, réinitialiser la liste
+  if (audioConfig.playedNarrationList.length >= audioConfig.narrationList.length) {
+    console.log("Cycle de narrations terminé, réinitialisation");
+    audioConfig.playedNarrationList = [];
+    // Garder la narration actuelle dans la liste des jouées pour éviter de la rejouer immédiatement
+    if (audioConfig.currentNarration) {
+      audioConfig.playedNarrationList.push(audioConfig.currentNarration);
+    }
+  }
+  
+  // Filtrer les narrations non encore jouées dans ce cycle
+  availableNarrations = audioConfig.narrationList.filter(narration => !audioConfig.playedNarrationList.includes(narration));
+  
+  // Si toutes les narrations ont été jouées (cas rare), réinitialiser
+  if (availableNarrations.length === 0) {
+    console.log("Aucune narration disponible, réinitialisation de la liste");
+    audioConfig.playedNarrationList = [];
+    // Mais toujours éviter de rejouer la narration actuelle
+    if (audioConfig.currentNarration) {
+      audioConfig.playedNarrationList.push(audioConfig.currentNarration);
+      availableNarrations = audioConfig.narrationList.filter(narration => narration !== audioConfig.currentNarration);
+    } else {
+      availableNarrations = audioConfig.narrationList;
+    }
   }
   
   const randomIndex = Math.floor(Math.random() * availableNarrations.length);
@@ -484,6 +537,12 @@ function playRandomNarration(forceNew = false) {
       .then(() => {
         console.log("Narration démarrée avec succès:", narrationPath);
         audioConfig.currentNarration = narrationPath;
+        
+        // Ajouter la narration à la liste des narrations jouées
+        if (!audioConfig.playedNarrationList.includes(narrationPath)) {
+          audioConfig.playedNarrationList.push(narrationPath);
+          console.log(`Narration ajoutée à la liste des narrations jouées. Jouées: ${audioConfig.playedNarrationList.length}/${audioConfig.narrationList.length}`);
+        }
       })
       .catch(e => {
         console.warn("Erreur de lecture narration:", e);
@@ -512,7 +571,7 @@ function playRandomNarration(forceNew = false) {
     // Ajouter quand même les points de bonus sans narration
     applyNarrationBonus();
   }
-  return true; // Indiquer que la narration a été déclenchée
+  return true; // Une narration a été lancée
 }
 
 // Fonction pour déclencher une narration aléatoire

@@ -48,5 +48,36 @@ function drawDebugInfo() {
   
   if (enemies.length > 5) {
     ctx.fillText(`  ... et ${enemies.length - 5} autres`, 10, y);
+    y += lineHeight;
+  }
+  
+  // Affichage des informations audio
+  if (audioConfig.soundEnabled) {
+    y += lineHeight;
+    ctx.fillText("Audio:", 10, y);
+    y += lineHeight;
+    
+    // Affichage de la musique en cours
+    if (audioConfig.currentMusic) {
+      const musicName = audioConfig.currentMusic.split('/').pop().replace(/\.(mp3|wav|ogg|m4a|aac|flac)$/i, '');
+      ctx.fillText(`  ♫ Musique: ${musicName}`, 10, y);
+      y += lineHeight;
+      
+      // Affichage de l'état de la rotation des musiques
+      ctx.fillText(`  Rotation musique: ${audioConfig.playedMusicList.length}/${audioConfig.musicList.length} pistes jouées`, 10, y);
+      y += lineHeight;
+    }
+    
+    // Affichage de la narration en cours
+    if (audioConfig.currentNarration) {
+      const narrationName = audioConfig.currentNarration.split('/').pop().replace(/\.(mp3|wav|ogg|m4a|aac|flac)$/i, '');
+      const narrationStatus = (!narrationAudio.paused && !narrationAudio.ended) ? "en cours" : "terminée";
+      ctx.fillText(`  🔊 Narration: ${narrationName} (${narrationStatus})`, 10, y);
+      y += lineHeight;
+      
+      // Affichage de l'état de la rotation des narrations
+      ctx.fillText(`  Rotation narration: ${audioConfig.playedNarrationList.length}/${audioConfig.narrationList.length} pistes jouées`, 10, y);
+      y += lineHeight;
+    }
   }
 } 
