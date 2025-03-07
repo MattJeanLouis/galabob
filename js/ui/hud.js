@@ -19,7 +19,11 @@ function drawHUD() {
   const progressBarHeight = 15;
   const progressBarX = (CANVAS_WIDTH - progressBarWidth) / 2;
   const progressBarY = 40;
-  const progress = stageSystem.enemiesDefeated / stageSystem.enemiesPerStage;
+  
+  // Vérifier que enemiesPerStage n'est pas zéro pour éviter une division par zéro
+  const progress = stageSystem.enemiesPerStage > 0 
+    ? Math.min(stageSystem.enemiesDefeated / stageSystem.enemiesPerStage, 1) 
+    : 0;
   
   // Fond de la barre
   ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
@@ -72,8 +76,12 @@ function drawDebugInfo() {
   y += lineHeight;
   ctx.fillText(`Ennemis vaincus: ${stageSystem.enemiesDefeated}/${stageSystem.enemiesPerStage}`, 10, y);
   y += lineHeight;
-  ctx.fillText(`Temps stage: ${Math.floor((Date.now() - stageSystem.stageStartTime)/1000)}s`, 10, y);
-  y += lineHeight;
+  
+  // Vérifier que stageStartTime existe pour éviter une erreur
+  if (stageSystem.stageStartTime) {
+    ctx.fillText(`Temps stage: ${Math.floor((Date.now() - stageSystem.stageStartTime)/1000)}s`, 10, y);
+    y += lineHeight;
+  }
   
   // Stats des ennemis
   ctx.fillText("Ennemis:", 10, y);

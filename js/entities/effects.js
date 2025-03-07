@@ -15,6 +15,53 @@ function triggerShake(intensity, duration) {
   shakeTime = duration;
 }
 
+// Créer une explosion
+function createExplosion(x, y, type = 'normal') {
+  let maxRadius = 30;
+  let color = 'rgba(255, 165, 0, 0.7)'; // Orange par défaut
+  
+  // Ajuster les paramètres selon le type d'explosion
+  if (type === 'player') {
+    maxRadius = 50;
+    color = 'rgba(255, 0, 0, 0.7)'; // Rouge pour le joueur
+    // Déclencher un effet de tremblement plus fort pour le joueur
+    triggerShake(10, 500);
+  } else if (type === 'shooter') {
+    maxRadius = 40;
+    color = 'rgba(255, 0, 255, 0.7)'; // Violet pour les shooters
+    triggerShake(7, 200);
+  } else if (type === 'fast') {
+    maxRadius = 25;
+    color = 'rgba(0, 255, 0, 0.7)'; // Vert pour les fast
+    triggerShake(5, 150);
+  } else {
+    // Ennemis normaux
+    triggerShake(5, 200);
+  }
+  
+  // Ajouter l'explosion principale
+  explosions.push({
+    x: x,
+    y: y,
+    radius: 5, // Rayon initial
+    maxRadius: maxRadius,
+    opacity: 1,
+    color: color
+  });
+  
+  // Ajouter quelques petites explosions secondaires
+  for (let i = 0; i < 3; i++) {
+    explosions.push({
+      x: x + (Math.random() * 30 - 15),
+      y: y + (Math.random() * 30 - 15),
+      radius: 2,
+      maxRadius: maxRadius * 0.5,
+      opacity: 0.7,
+      color: color
+    });
+  }
+}
+
 // Mise à jour des explosions
 function updateExplosions(deltaTime) {
   for (let i = explosions.length - 1; i >= 0; i--) {

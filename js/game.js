@@ -24,14 +24,15 @@ function initGame() {
   
   // Initialiser le système de stages
   stageSystem.currentStage = 1;
+  stageSystem.resetStageStats(); // Assurons-nous que les stats sont réinitialisées avant initStage
   stageSystem.initStage();
   
   if (stars.length === 0) createStars();
   gameState = "playing";
   player.speed = SPEED_CONFIG.BASE_PLAYER_SPEED;
   
-  // Jouer une narration aléatoire au début de la partie
-  playRandomNarration();
+  // La narration est déjà appelée dans initStage, pas besoin de la rappeler ici
+  // playRandomNarration();
 }
 
 // Boucle de mise à jour
@@ -139,10 +140,11 @@ function update(deltaTime) {
           
           // Chance de générer un power-up
           if (Math.random() < 0.1) {
-            createPowerUp(
-              enemies[j].x + enemies[j].width / 2 - 15,
+            const newPowerUp = createPowerUp(
+              enemies[j].x + enemies[j].width / 2 - 10,
               enemies[j].y
             );
+            powerUps.push(newPowerUp);
           }
           
           // Retirer l'ennemi
@@ -154,21 +156,18 @@ function update(deltaTime) {
   }
 
   // Collisions : joueur vs projectiles ennemis
-  enemyBullets.forEach(bullet => {
+  enemyBullets.forEach((bullet, index) => {
     if (rectIntersect(bullet, player)) {
+      // Retirer le projectile
+      enemyBullets.splice(index, 1);
+      
       // Créer une explosion autour du joueur
       createExplosion(
         player.x + player.width / 2,
         player.y + player.height / 2,
         'player'
       );
-      createExplosion({
-        x: player.x + player.width / 2,
-        y: player.y + player.height / 2,
-        radius: 0,
-        maxRadius: 30,
-        opacity: 1
-      });
+      
       triggerShake(8, 300);
       player.lives -= 1;
       if (player.lives <= 0) {

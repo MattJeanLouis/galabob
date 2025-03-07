@@ -56,33 +56,56 @@ function createEnemy(x, y, type, stage = 1, pattern = ENEMY_PATTERNS.PATROL) {
   return enemy;
 }
 
-// Création d'une vague d'ennemis
-function createEnemies() {
-  enemies = [];
-  const rows = 4;
-  const cols = 10;
-  const enemyWidth = 40;
-  const enemyHeight = 30;
-  const paddingX = 20;
-  const paddingY = 20;
-  const offsetX = (CANVAS_WIDTH - (cols * enemyWidth + (cols - 1) * paddingX)) / 2;
-  const offsetY = 50;
+// Cette fonction est maintenant dans stages.js
+// function createEnemies() { ... }
 
-  const patterns = Object.values(ENEMY_PATTERNS);
+// Fonction pour créer une vague d'ennemis (pour compatibilité avec game.js)
+function createEnemyWave(count) {
+  // Types d'ennemis selon le stage actuel
+  let normalRatio = 0.7;
+  let shooterRatio = 0.15;
+  let fastRatio = 0.15;
   
-  for (let row = 0; row < rows; row++) {
-    for (let col = 0; col < cols; col++) {
-      let x = offsetX + col * (enemyWidth + paddingX);
-      let y = offsetY + row * (enemyHeight + paddingY);
-      
-      let rnd = Math.random();
-      let type = "normal";
-      if (rnd < 0.1) type = "fast";
-      else if (rnd < 0.3) type = "shooter";
-      
-      const pattern = patterns[Math.floor(Math.random() * patterns.length)];
-      enemies.push(createEnemy(x, y, type, pattern));
-    }
+  // Ajuster les ratios en fonction du stage
+  if (stageSystem.currentStage >= 3) {
+    normalRatio = 0.5;
+    shooterRatio = 0.25;
+    fastRatio = 0.25;
+  }
+  if (stageSystem.currentStage >= 6) {
+    normalRatio = 0.3;
+    shooterRatio = 0.35;
+    fastRatio = 0.35;
+  }
+  
+  // S'assurer que le nombre est valide
+  count = Math.max(1, Math.min(count, 30));
+  
+  // Créer les ennemis "qui arrivent du haut de l'écran"
+  for (let i = 0; i < count; i++) {
+    // Déterminer le type d'ennemi selon les ratios
+    const rand = Math.random();
+    let type;
+    if (rand < normalRatio) type = "normal";
+    else if (rand < normalRatio + shooterRatio) type = "shooter";
+    else type = "fast";
+    
+    const size = 30;
+    
+    // Calculer la position en haut de l'écran
+    const x = Math.random() * (CANVAS_WIDTH - size - 20) + 10;
+    // Position initiale au-dessus de l'écran, décalées pour entrer progressivement
+    const y = -50 - (i * 30); 
+    
+    // Position cible en fonction de la position dans la formation
+    const targetY = 60 + Math.floor(i / 10) * 40;
+    
+    // Créer l'ennemi avec le type et stage actuels
+    const enemy = createEnemy(x, y, type, stageSystem.currentStage);
+    enemy.hasEntered = false; // Pas encore entré dans l'écran
+    enemy.targetY = targetY; // Position cible pour l'entrée
+    
+    enemies.push(enemy);
   }
 }
 

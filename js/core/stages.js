@@ -218,8 +218,10 @@ const stageSystem = {
 function createEnemiesForStage(stageNumber) {
   enemies = [];
   
-  // Nombre d'ennemis dépend du niveau (augmente avec les stages)
-  const baseEnemyCount = stageSystem.enemiesPerStage;
+  // Définir un nombre minimum d'ennemis pour éviter une division par zéro
+  if (!stageSystem.enemiesPerStage || stageSystem.enemiesPerStage <= 0) {
+    stageSystem.enemiesPerStage = 10;
+  }
   
   // Types d'ennemis selon le stage
   let normalRatio = 0.8;
@@ -239,7 +241,7 @@ function createEnemiesForStage(stageNumber) {
   }
   
   // Créer les ennemis initiaux (environ 30-40% du total)
-  const initialEnemies = Math.floor(baseEnemyCount * 0.4);
+  const initialEnemies = Math.floor(stageSystem.enemiesPerStage * 0.4);
   
   for (let i = 0; i < initialEnemies; i++) {
     const type = determineEnemyType(normalRatio, shooterRatio, fastRatio);
@@ -254,9 +256,13 @@ function createEnemiesForStage(stageNumber) {
     const col = i % cols;
     const row = Math.floor(i / cols);
     
-    enemies.push({
-      x: startX + col * spacingX,
-      y: 60 + row * spacingY,
+    const x = startX + col * spacingX;
+    const y = 60 + row * spacingY;
+    
+    // Créer l'ennemi avec son type et le numéro du stage
+    const enemy = {
+      x: x,
+      y: y,
       width: size,
       height: size,
       hp: getEnemyHP(type, stageNumber),
@@ -265,8 +271,11 @@ function createEnemiesForStage(stageNumber) {
       speedModifier: getEnemySpeedModifier(type, stageNumber),
       shotChance: getEnemyShotChance(type, stageNumber),
       points: getEnemyPoints(type),
-      hasEntered: true
-    });
+      hasEntered: true,
+      targetY: y // Position cible déjà atteinte pour les ennemis initiaux
+    };
+    
+    enemies.push(enemy);
   }
 }
 
@@ -331,6 +340,9 @@ function getEnemyPoints(type) {
 
 // Mise à jour spécifique des étoiles pendant la transition
 function updateStarsTransition() {
+  // Vérifier que stars existe et est un tableau
+  if (!stars || !Array.isArray(stars)) return;
+  
   stars.forEach(star => {
     star.y += star.speed * stageSystem.starSpeedMultiplier;
     if (star.y > CANVAS_HEIGHT) {
