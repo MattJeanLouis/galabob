@@ -18,18 +18,31 @@ function createPowerUp(x, y) {
 
 // Mise à jour des power-ups
 function updatePowerUps() {
-  for (let i = powerUps.length - 1; i >= 0; i--) {
-    let p = powerUps[i];
-    p.y += p.speed;
-    if (p.y > CANVAS_HEIGHT) {
-      powerUps.splice(i, 1);
-      continue;
+  try {
+    if (!player) return; // Vérifier que le joueur existe
+    
+    for (let i = powerUps.length - 1; i >= 0; i--) {
+      let p = powerUps[i];
+      // Vérifier que le power-up existe
+      if (!p) {
+        powerUps.splice(i, 1);
+        continue;
+      }
+      
+      p.y += p.speed;
+      if (p.y > CANVAS_HEIGHT) {
+        powerUps.splice(i, 1);
+        continue;
+      }
+      
+      if (rectIntersect(p, player)) {
+        player.weapon = p.type;
+        player.weaponTimer = 10000; // 10 secondes
+        powerUps.splice(i, 1);
+      }
     }
-    if (rectIntersect(p, player)) {
-      player.weapon = p.type;
-      player.weaponTimer = 10000; // 10 secondes
-      powerUps.splice(i, 1);
-    }
+  } catch (e) {
+    console.error("Erreur dans updatePowerUps:", e);
   }
 }
 

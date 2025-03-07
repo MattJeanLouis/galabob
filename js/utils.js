@@ -1,5 +1,17 @@
 // Fonction utilitaire : détection de collision entre deux rectangles
 function rectIntersect(a, b) {
+  // Vérifier que les objets existent et ont les propriétés nécessaires
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') {
+    return false;
+  }
+  
+  if (typeof a.x !== 'number' || typeof a.y !== 'number' || 
+      typeof a.width !== 'number' || typeof a.height !== 'number' ||
+      typeof b.x !== 'number' || typeof b.y !== 'number' || 
+      typeof b.width !== 'number' || typeof b.height !== 'number') {
+    return false;
+  }
+  
   return (
     a.x < b.x + b.width &&
     a.x + a.width > b.x &&

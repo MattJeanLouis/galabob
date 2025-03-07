@@ -180,7 +180,8 @@ function createDebris(x, y, color, type) {
 
 // Création d'un popup de score avec système de combo
 function createScorePopup(x, y, points, combo) {
-  const multiplier = Math.min(combo, 8); // Limite le multiplicateur à 8x
+  // Vérifier si combo est un nombre, sinon utiliser 1 comme valeur par défaut
+  const multiplier = typeof combo === 'number' ? Math.min(combo, 8) : (combo === 'combo' ? 2 : 1); // Limite le multiplicateur à 8x
   const finalPoints = points * multiplier;
   
   scorePopups.push({

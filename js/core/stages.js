@@ -45,40 +45,111 @@ const stageSystem = {
   
   // Initialiser un nouveau stage
   initStage() {
-    // Réinitialiser l'état du jeu pour le nouveau stage
-    enemySpeed = 1 + (this.currentStage * 0.2); // La vitesse augmente avec les stages
-    enemyDirection = 1;
-    enemyShotTimer = 0;
-    playerBullets = [];
-    enemyBullets = [];
-    explosions = [];
-    powerUps = [];
+    try {
+      // Réinitialiser l'état du jeu pour le nouveau stage
+      enemySpeed = 1 + (this.currentStage * 0.2); // La vitesse augmente avec les stages
+      enemyDirection = 1;
+      enemyShotTimer = 0;
+      playerBullets = [];
+      enemyBullets = [];
+      explosions = [];
+      powerUps = [];
+      
+      // Réinitialiser les statistiques du stage
+      this.resetStageStats();
+      
+      // Réinitialiser les paramètres de transition
+      this.transitionActive = false;
+      this.transitionProgress = 0;
+      this.starSpeedMultiplier = 1;
+      this.transitionPhase = 'none';
+      
+      // Remettre le joueur en position normale
+      player.x = CANVAS_WIDTH / 2 - player.width / 2;
+      player.y = CANVAS_HEIGHT - player.height - 20;
+      
+      // Créer les ennemis adaptés au stage actuel
+      const enemiesCreated = createEnemiesForStage(this.currentStage);
+      
+      // Si les ennemis n'ont pas pu être créés, utiliser une méthode alternative simple
+      if (!enemiesCreated) {
+        console.warn("Utilisation de la méthode alternative de création d'ennemis");
+        this.createSimpleEnemies();
+      }
+      
+      // S'assurer que les étoiles sont créées
+      if (!stars || stars.length === 0) {
+        createStars();
+      }
+      
+      // Jouer une narration de début de stage si le son est activé
+      if (audioConfig.soundEnabled) {
+        try {
+          playRandomNarration();
+        } catch (e) {
+          console.error("Erreur lors de la lecture de la narration:", e);
+        }
+      }
+      
+      // Remettre le jeu en mode "playing"
+      gameState = "playing";
+    } catch (e) {
+      console.error("Erreur lors de l'initialisation du stage:", e);
+      
+      // Fallback en cas d'erreur critique
+      gameState = "menu";
+    }
+  },
+  
+  // Méthode simple de secours pour créer des ennemis basiques
+  createSimpleEnemies() {
+    // Vider le tableau d'ennemis
+    enemies = [];
     
-    // Créer les ennemis adaptés au stage actuel
-    createEnemiesForStage(this.currentStage);
+    // Taille des ennemis - augmentée pour plus de visibilité
+    const size = 45;
     
-    // Réinitialiser les statistiques du stage
-    this.resetStageStats();
+    // Créer une simple rangée d'ennemis
+    const rowCount = Math.min(3, this.currentStage);
+    const colCount = 5;
     
-    // Réinitialiser les paramètres de transition
-    this.transitionActive = false;
-    this.transitionProgress = 0;
-    this.starSpeedMultiplier = 1;
-    this.transitionPhase = 'none';
-    
-    // Remettre le joueur en position normale
-    player.x = CANVAS_WIDTH / 2 - player.width / 2;
-    player.y = CANVAS_HEIGHT - player.height - 20;
-    
-    // Jouer une narration de début de stage
-    playRandomNarration();
-    
-    // Remettre le jeu en mode "playing"
-    gameState = "playing";
+    for (let row = 0; row < rowCount; row++) {
+      for (let col = 0; col < colCount; col++) {
+        enemies.push({
+          x: 50 + col * 100,
+          y: 50 + row * 50,
+          width: size,
+          height: size,
+          hp: 1,
+          type: "normal",
+          color: "#ff0000",
+          speedModifier: 1,
+          shotChance: 0.001,
+          points: 10,
+          hasEntered: true,
+          pattern: ENEMY_PATTERNS.PATROL,
+          startX: 50 + col * 100,
+          startY: 50 + row * 50
+        });
+      }
+    }
   },
   
   // Démarrer la transition vers le stage suivant
   startTransition() {
+    // Protection contre les appels multiples
+    if (this.transitionActive) {
+      console.log("Transition déjà active, ignoré");
+      return;
+    }
+    
+    console.log("Démarrage de la transition vers le stage suivant");
+    
+    // Nettoyage préventif
+    playerBullets = [];
+    enemyBullets = [];
+    
+    // Définir les états de transition
     this.transitionActive = true;
     this.transitionProgress = 0;
     this.transitionPhase = 'stageComplete';
@@ -88,74 +159,174 @@ const stageSystem = {
     this.stageStats.timeElapsed = Date.now() - this.stageStartTime;
     
     // Configurer le vaisseau pour la transition
-    this.shipTransition.active = false;
-    this.shipTransition.x = player.x;
-    this.shipTransition.y = player.y;
-    this.shipTransition.targetY = -player.height;
+    this.shipTransition = {
+      active: false,
+      x: player.x,
+      y: player.y,
+      targetY: -player.height,
+      speed: 10
+    };
     
     // Pause du gameplay normal
     isPaused = true;
-  },
-  
-  // Passer au stage suivant
-  goToNextStage() {
-    this.currentStage++;
-    if (this.currentStage > this.maxStage) {
-      // Victoire finale du jeu si tous les stages sont terminés
-      // Pour l'instant on boucle
-      this.currentStage = 1;
-    }
-    
-    this.stageCompleted = false;
-    isPaused = false;
-    this.initStage();
   },
   
   // Mettre à jour la progression de la transition
   updateTransition(deltaTime) {
     if (!this.transitionActive) return;
     
+    // Protection contre les valeurs invalides
+    if (!deltaTime || deltaTime < 0 || deltaTime > 1000) {
+      deltaTime = 16; // Valeur par défaut sécuritaire (~60fps)
+    }
+    
     // Progression de la transition
-    this.transitionProgress += deltaTime / this.transitionDuration;
+    const progressIncrement = deltaTime / this.transitionDuration;
+    this.transitionProgress += progressIncrement;
+    
+    // Vérifier une progression extrême pour éviter les blocages
+    if (this.transitionProgress > 5) {
+      console.warn("Progression anormale détectée, forçage de la fin de transition");
+      this.forceCompleteTransition();
+      return;
+    }
     
     // Gestion des différentes phases de la transition
-    if (this.transitionPhase === 'stageComplete') {
-      // Phase 1: Afficher "Stage X Complete!"
-      if (this.transitionProgress > 0.3) {
-        this.transitionPhase = 'speedUp';
-      }
-    } 
-    else if (this.transitionPhase === 'speedUp') {
-      // Phase 2: Accélérer les étoiles
-      this.starSpeedMultiplier += deltaTime * 0.005;
-      if (this.starSpeedMultiplier > this.maxStarSpeedMultiplier) {
-        this.starSpeedMultiplier = this.maxStarSpeedMultiplier;
-      }
-      
-      if (this.transitionProgress > 0.5) {
-        this.transitionPhase = 'shipMove';
-        this.shipTransition.active = true;
-      }
-    } 
-    else if (this.transitionPhase === 'shipMove') {
-      // Phase 3: Déplacer le vaisseau vers le haut
-      this.shipTransition.y -= this.shipTransition.speed;
-      
-      if (this.shipTransition.y <= this.shipTransition.targetY) {
-        this.transitionPhase = 'stageBegin';
-      }
-    } 
-    else if (this.transitionPhase === 'stageBegin') {
-      // Phase 4: Afficher "Stage X"
-      if (this.transitionProgress >= 0.9) {
-        // Terminer la transition et commencer le stage suivant
-        this.goToNextStage();
-        this.transitionActive = false;
-      }
+    switch (this.transitionPhase) {
+      case 'stageComplete':
+        // Phase 1: Afficher "Stage X Complete!"
+        if (this.transitionProgress > 0.3) {
+          this.transitionPhase = 'speedUp';
+        }
+        break;
+        
+      case 'speedUp':
+        // Phase 2: Accélérer les étoiles
+        this.starSpeedMultiplier += deltaTime * 0.005;
+        if (this.starSpeedMultiplier > this.maxStarSpeedMultiplier) {
+          this.starSpeedMultiplier = this.maxStarSpeedMultiplier;
+        }
+        
+        if (this.transitionProgress > 0.5) {
+          this.transitionPhase = 'shipMove';
+          this.shipTransition.active = true;
+        }
+        break;
+        
+      case 'shipMove':
+        // Phase 3: Déplacer le vaisseau vers le haut
+        if (this.shipTransition) {
+          this.shipTransition.y -= this.shipTransition.speed;
+          
+          if (this.shipTransition.y <= this.shipTransition.targetY) {
+            this.transitionPhase = 'stageBegin';
+          }
+        } else {
+          // Protection si shipTransition n'est pas défini
+          this.transitionPhase = 'stageBegin';
+        }
+        break;
+        
+      case 'stageBegin':
+        // Phase 4: Afficher "Stage X"
+        if (this.transitionProgress >= 0.9) {
+          this.completeTransition();
+        }
+        break;
+        
+      default:
+        // Si la phase n'est pas reconnue, on passe à la fin
+        console.warn("Phase de transition non reconnue:", this.transitionPhase);
+        this.completeTransition();
     }
     
     // Mise à jour des étoiles pendant la transition
-    updateStarsTransition();
+    if (typeof updateStarsTransition === 'function') {
+      updateStarsTransition();
+    }
+  },
+  
+  // Terminer normalement la transition et passer au stage suivant
+  completeTransition() {
+    try {
+      this.goToNextStage();
+    } catch (e) {
+      console.error("Erreur lors du passage au stage suivant:", e);
+      this.forceNextStage();
+    } finally {
+      this.resetTransitionState();
+    }
+  },
+  
+  // Forcer la fin de la transition en cas de problème
+  forceCompleteTransition() {
+    console.warn("Forçage de la fin de transition");
+    this.forceNextStage();
+    this.resetTransitionState();
+  },
+  
+  // Réinitialiser l'état de transition
+  resetTransitionState() {
+    this.transitionActive = false;
+    this.transitionProgress = 0;
+    this.transitionPhase = 'none';
+    this.starSpeedMultiplier = 1;
+    
+    // S'assurer que le jeu n'est plus en pause
+    isPaused = false;
+  },
+  
+  // Passer au stage suivant de façon sécurisée
+  goToNextStage() {
+    // Incrémenter le stage
+    this.currentStage++;
+    if (this.currentStage > this.maxStage) {
+      this.currentStage = 1; // Retour au début après avoir terminé tous les stages
+    }
+    
+    // Réinitialiser l'état du jeu
+    this.stageCompleted = false;
+    this.enemiesDefeated = 0;
+    
+    // Initialiser le nouveau stage
+    this.initStage();
+  },
+  
+  // Méthode de secours pour forcer le passage au stage suivant
+  forceNextStage() {
+    console.warn("Utilisation de la méthode de secours pour passer au stage suivant");
+    
+    // Nettoyage complet des objets du jeu
+    enemies = [];
+    playerBullets = [];
+    enemyBullets = [];
+    explosions = [];
+    powerUps = [];
+    
+    // Incrémenter le stage
+    this.currentStage++;
+    if (this.currentStage > this.maxStage) {
+      this.currentStage = 1;
+    }
+    
+    // Réinitialiser les états
+    this.stageCompleted = false;
+    this.enemiesDefeated = 0;
+    isPaused = false;
+    
+    // Repositionner le joueur
+    if (player) {
+      player.x = CANVAS_WIDTH / 2 - (player.width || 40) / 2;
+      player.y = CANVAS_HEIGHT - (player.height || 20) - 20;
+    }
+    
+    // Forcer l'initialisation du nouveau stage
+    try {
+      this.initStage();
+    } catch (e) {
+      console.error("Échec critique lors de l'initialisation forcée du stage:", e);
+      gameState = "menu"; // Retour au menu en dernier recours
+    }
   },
   
   // Dessiner la transition entre les stages
@@ -216,90 +387,82 @@ const stageSystem = {
 
 // Fonction pour créer des ennemis adaptés au stage actuel
 function createEnemiesForStage(stageNumber) {
-  enemies = [];
-  
-  // Définir un nombre minimum d'ennemis pour éviter une division par zéro
-  if (!stageSystem.enemiesPerStage || stageSystem.enemiesPerStage <= 0) {
-    stageSystem.enemiesPerStage = 10;
-  }
-  
-  // Types d'ennemis selon le stage
-  let normalRatio = 0.8;
-  let shooterRatio = 0.1;
-  let fastRatio = 0.1;
-  
-  // Ajuster les ratios en fonction du stage
-  if (stageNumber >= 3) {
-    normalRatio = 0.6;
-    shooterRatio = 0.2;
-    fastRatio = 0.2;
-  }
-  if (stageNumber >= 6) {
-    normalRatio = 0.4;
-    shooterRatio = 0.3;
-    fastRatio = 0.3;
-  }
-  
-  // Créer les ennemis initiaux (environ 30-40% du total)
-  const initialEnemies = Math.floor(stageSystem.enemiesPerStage * 0.4);
-  
-  // Patterns disponibles
-  const availablePatterns = Object.values(ENEMY_PATTERNS);
-  
-  for (let i = 0; i < initialEnemies; i++) {
-    const type = determineEnemyType(normalRatio, shooterRatio, fastRatio);
-    const size = 30;
+  try {
+    // Réinitialiser le tableau des ennemis
+    enemies = [];
     
-    // Calculer la position pour former des vagues
-    const cols = 10;
-    const spacingX = 60;
-    const spacingY = 40;
-    const startX = (CANVAS_WIDTH - (cols * spacingX)) / 2 + 15;
-    
-    const col = i % cols;
-    const row = Math.floor(i / cols);
-    
-    const x = startX + col * spacingX;
-    const y = 60 + row * spacingY;
-    
-    // Déterminer le pattern - les patterns spéciaux sont plus fréquents dans les niveaux avancés
-    let patternChance = 0.2 + (stageNumber - 1) * 0.05; // Augmente de 5% par niveau
-    patternChance = Math.min(patternChance, 0.5); // Max 50% de chance pour les patterns spéciaux
-    
-    let pattern;
-    if (Math.random() < patternChance) {
-      // Choisir un pattern spécial au hasard (DIVE ou SWEEP)
-      const specialPatterns = [ENEMY_PATTERNS.DIVE, ENEMY_PATTERNS.SWEEP];
-      pattern = specialPatterns[Math.floor(Math.random() * specialPatterns.length)];
-    } else {
-      // Pattern de base (PATROL)
-      pattern = ENEMY_PATTERNS.PATROL;
+    // Définir un nombre minimum d'ennemis pour éviter une division par zéro
+    if (!stageSystem.enemiesPerStage || stageSystem.enemiesPerStage <= 0) {
+      stageSystem.enemiesPerStage = 10;
     }
     
-    // Créer l'ennemi avec son type et le numéro du stage
-    const enemy = {
-      x: x,
-      y: y,
-      width: size,
-      height: size,
-      hp: getEnemyHP(type, stageNumber),
-      type: type,
-      color: getEnemyColor(type),
-      speedModifier: getEnemySpeedModifier(type, stageNumber),
-      shotChance: getEnemyShotChance(type, stageNumber),
-      points: getEnemyPoints(type),
-      hasEntered: true,
-      targetY: y, // Position cible déjà atteinte pour les ennemis initiaux
-      pattern: pattern, // Ajouter le pattern de mouvement
-      patternStep: 0, // Étape initiale du pattern
-      startX: x, // Position X de référence pour les patterns
-      startY: y, // Position Y de référence pour les patterns
-      diving: false, // Pas en plongée au départ
-      angle: 0, // Angle initial pour les mouvements circulaires
-      active: false // Activation des comportements spéciaux
-    };
+    // Limiter la taille de la vague initiale pour éviter les surcharges
+    const initialEnemies = Math.min(16, Math.floor(stageSystem.enemiesPerStage * 0.5));
     
-    enemies.push(enemy);
+    // Sélectionner une formation selon le niveau
+    let formationType, choreographyType;
+    
+    // Choisir une formation selon le stage
+    if (stageNumber <= 2) {
+      formationType = FORMATIONS.GRID; // Formation standard pour débuter
+    } else if (stageNumber <= 4) {
+      // Alterner entre différentes formations pour les stages intermédiaires
+      const formationRoll = Math.random();
+      if (formationRoll < 0.5) {
+        formationType = FORMATIONS.DOUBLE_ROW;
+      } else {
+        formationType = FORMATIONS.DIAMOND;
+      }
+    } else {
+      // Utiliser des formations plus complexes pour les stages avancés
+      const formationRoll = Math.random();
+      if (formationRoll < 0.4) {
+        formationType = FORMATIONS.CIRCLE;
+      } else if (formationRoll < 0.7) {
+        formationType = FORMATIONS.DIAMOND;
+      } else {
+        formationType = FORMATIONS.DOUBLE_ROW;
+      }
+    }
+    
+    // Choisir une chorégraphie d'entrée selon le stage
+    if (stageNumber <= 2) {
+      // Chorégraphies simples pour débuter
+      const choreoRoll = Math.random();
+      if (choreoRoll < 0.6) {
+        choreographyType = ENTRY_CHOREOGRAPHIES.CURVE_LEFT;
+      } else {
+        choreographyType = ENTRY_CHOREOGRAPHIES.CURVE_RIGHT;
+      }
+    } else if (stageNumber <= 4) {
+      // Chorégraphies plus variées pour les stages intermédiaires
+      const choreoRoll = Math.random();
+      if (choreoRoll < 0.4) {
+        choreographyType = ENTRY_CHOREOGRAPHIES.ZIGZAG;
+      } else if (choreoRoll < 0.7) {
+        choreographyType = ENTRY_CHOREOGRAPHIES.SPLIT;
+      } else {
+        choreographyType = ENTRY_CHOREOGRAPHIES.CURVE_LEFT;
+      }
+    } else {
+      // Chorégraphies avancées pour les stages élevés
+      const choreoRoll = Math.random();
+      if (choreoRoll < 0.4) {
+        choreographyType = ENTRY_CHOREOGRAPHIES.SPIRAL;
+      } else if (choreoRoll < 0.7) {
+        choreographyType = ENTRY_CHOREOGRAPHIES.SPLIT;
+      } else {
+        choreographyType = ENTRY_CHOREOGRAPHIES.ZIGZAG;
+      }
+    }
+    
+    // Créer la formation avec les paramètres déterminés
+    createFormation(initialEnemies, formationType, choreographyType, stageNumber);
+    
+    return true;
+  } catch (e) {
+    console.error("Erreur lors de la création des ennemis:", e);
+    return false;
   }
 }
 
