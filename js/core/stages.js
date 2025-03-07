@@ -243,6 +243,9 @@ function createEnemiesForStage(stageNumber) {
   // Créer les ennemis initiaux (environ 30-40% du total)
   const initialEnemies = Math.floor(stageSystem.enemiesPerStage * 0.4);
   
+  // Patterns disponibles
+  const availablePatterns = Object.values(ENEMY_PATTERNS);
+  
   for (let i = 0; i < initialEnemies; i++) {
     const type = determineEnemyType(normalRatio, shooterRatio, fastRatio);
     const size = 30;
@@ -259,6 +262,20 @@ function createEnemiesForStage(stageNumber) {
     const x = startX + col * spacingX;
     const y = 60 + row * spacingY;
     
+    // Déterminer le pattern - les patterns spéciaux sont plus fréquents dans les niveaux avancés
+    let patternChance = 0.2 + (stageNumber - 1) * 0.05; // Augmente de 5% par niveau
+    patternChance = Math.min(patternChance, 0.5); // Max 50% de chance pour les patterns spéciaux
+    
+    let pattern;
+    if (Math.random() < patternChance) {
+      // Choisir un pattern spécial au hasard (DIVE ou SWEEP)
+      const specialPatterns = [ENEMY_PATTERNS.DIVE, ENEMY_PATTERNS.SWEEP];
+      pattern = specialPatterns[Math.floor(Math.random() * specialPatterns.length)];
+    } else {
+      // Pattern de base (PATROL)
+      pattern = ENEMY_PATTERNS.PATROL;
+    }
+    
     // Créer l'ennemi avec son type et le numéro du stage
     const enemy = {
       x: x,
@@ -272,7 +289,14 @@ function createEnemiesForStage(stageNumber) {
       shotChance: getEnemyShotChance(type, stageNumber),
       points: getEnemyPoints(type),
       hasEntered: true,
-      targetY: y // Position cible déjà atteinte pour les ennemis initiaux
+      targetY: y, // Position cible déjà atteinte pour les ennemis initiaux
+      pattern: pattern, // Ajouter le pattern de mouvement
+      patternStep: 0, // Étape initiale du pattern
+      startX: x, // Position X de référence pour les patterns
+      startY: y, // Position Y de référence pour les patterns
+      diving: false, // Pas en plongée au départ
+      angle: 0, // Angle initial pour les mouvements circulaires
+      active: false // Activation des comportements spéciaux
     };
     
     enemies.push(enemy);
@@ -300,10 +324,10 @@ function getEnemyHP(type, stageNumber) {
 
 function getEnemyColor(type) {
   switch (type) {
-    case "normal": return "red";
-    case "shooter": return "purple";
-    case "fast": return "green";
-    default: return "red";
+    case "normal": return "#5fff55"; // Vert clair
+    case "shooter": return "#ff55ff"; // Rose
+    case "fast": return "#ffaa22"; // Orange
+    default: return "#ff5555"; // Rouge par défaut
   }
 }
 
