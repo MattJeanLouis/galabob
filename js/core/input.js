@@ -148,6 +148,20 @@ document.addEventListener('DOMContentLoaded', function() {
         mouseY <= volumeButtonY + volumeButtonHeight
       ) {
         toggleAudioControls();
+        
+        // S'assurer que le son est activé et à un volume correct
+        if (!audioConfig.soundEnabled) {
+          enableGameAudio();
+        } else if (backgroundMusic.volume === 0 && audioConfig.musicVolume > 0) {
+          // Corriger le problème de volume à zéro
+          console.log("Réinitialisation du volume après détection de volume à zéro");
+          backgroundMusic.volume = audioConfig.musicVolume;
+          
+          // Si la musique est déjà chargée mais pas en cours de lecture, la redémarrer
+          if (backgroundMusic.paused && audioConfig.currentMusic) {
+            backgroundMusic.play().catch(e => console.warn("Impossible de démarrer la musique:", e));
+          }
+        }
       }
     }
   });

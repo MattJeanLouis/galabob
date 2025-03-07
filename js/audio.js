@@ -335,7 +335,10 @@ function playRandomMusic() {
   
   try {
     backgroundMusic.src = musicPath;
+    
+    // S'assurer que le volume est correctement défini avant de jouer
     backgroundMusic.volume = audioConfig.musicVolume;
+    console.log("Volume de musique appliqué:", audioConfig.musicVolume);
     
     backgroundMusic.onerror = function() {
       console.warn(`Erreur lors du chargement de la musique: ${musicPath}`);
@@ -346,16 +349,27 @@ function playRandomMusic() {
       }
     };
     
-    // Mémoriser le volume actuel
-    const currentVolume = backgroundMusic.volume;
-    
-    // Transition en fondu
-    backgroundMusic.volume = 0;
+    // Si les effets de fondu sont activés, commencer avec volume à 0
+    let targetVolume = audioConfig.musicVolume;
+    if (audioConfig.useFadeEffects) {
+      backgroundMusic.volume = 0;
+    }
     
     backgroundMusic.play()
       .then(() => {
         console.log("Musique démarrée avec succès:", musicPath);
         audioConfig.currentMusic = musicPath;
+        
+        // Appliquer un fondu d'entrée si l'option est activée
+        if (audioConfig.useFadeEffects) {
+          let fadeInInterval = setInterval(() => {
+            backgroundMusic.volume = Math.min(targetVolume, backgroundMusic.volume + 0.05);
+            if (backgroundMusic.volume >= targetVolume) {
+              clearInterval(fadeInInterval);
+              console.log("Fondu d'entrée terminé, volume final:", backgroundMusic.volume);
+            }
+          }, 100);
+        }
       })
       .catch(e => {
         console.warn("Erreur de lecture audio:", e);
@@ -601,6 +615,15 @@ function enableGameAudio() {
     audioConfig.soundEnabled = true;
     localStorage.setItem('soundEnabled', 'true');
     
+    // S'assurer que les volumes sont correctement initialisés avant de jouer la musique
+    backgroundMusic.volume = audioConfig.musicVolume;
+    narrationAudio.volume = audioConfig.narrationVolume;
+    
+    // Affichage de débogage des valeurs de volume
+    console.log("Volume de musique initialisé à:", audioConfig.musicVolume);
+    console.log("Volume de narration initialisé à:", audioConfig.narrationVolume);
+    console.log("Volume d'effets sonores initialisé à:", audioConfig.sfxVolume);
+    
     // Jouer la musique de fond avec un léger délai pour être sûr
     setTimeout(() => {
       if (audioConfig.musicList.length > 0) {
@@ -646,7 +669,13 @@ function changeRandomMusic() {
   console.log("Changement de musique vers:", newMusicPath);
   
   // Sauvegarder le volume actuel
-  const currentVolume = backgroundMusic.volume;
+  const currentVolume = audioConfig.musicVolume;
+  
+  // Vérifier si le volume était à zéro alors qu'il ne devrait pas l'être
+  if (backgroundMusic.volume === 0 && currentVolume > 0) {
+    console.log("Correction du volume à zéro lors du changement de musique");
+    backgroundMusic.volume = currentVolume;
+  }
   
   // Si l'option de fondu est désactivée, changer la musique immédiatement
   if (!audioConfig.useFadeEffects) {
