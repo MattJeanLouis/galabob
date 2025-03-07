@@ -1,0 +1,25 @@
+# Ignorer le dossier prompt
+/prompt/
+
+# Ignorer le contenu des dossiers audio mais conserver les dossiers eux-mêmes
+/assets/audio/musique/*
+/assets/audio/narration/*
+
+# Ne pas ignorer les fichiers .gitkeep pour conserver la structure des dossiers
+!/assets/audio/musique/.gitkeep
+!/assets/audio/narration/.gitkeep
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+
+# Fichiers d'environnement de développement
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Dépendances et build
+/node_modules/
+/dist/
+/build/ 
