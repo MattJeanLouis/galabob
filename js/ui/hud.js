@@ -9,6 +9,41 @@ function drawHUD() {
   ctx.textAlign = 'left';
   ctx.fillText("Score : " + score, 10, 30);
   ctx.fillText("Vies : " + player.lives, 10, 55);
+  
+  // Affichage du stage actuel
+  ctx.textAlign = 'center';
+  ctx.fillText(`Stage ${stageSystem.currentStage}`, CANVAS_WIDTH / 2, 30);
+  
+  // Barre de progression du stage
+  const progressBarWidth = 200;
+  const progressBarHeight = 15;
+  const progressBarX = (CANVAS_WIDTH - progressBarWidth) / 2;
+  const progressBarY = 40;
+  const progress = stageSystem.enemiesDefeated / stageSystem.enemiesPerStage;
+  
+  // Fond de la barre
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+  ctx.fillRect(progressBarX, progressBarY, progressBarWidth, progressBarHeight);
+  
+  // Barre de progression
+  ctx.fillStyle = 'rgba(0, 255, 100, 0.7)';
+  ctx.fillRect(progressBarX, progressBarY, progressBarWidth * progress, progressBarHeight);
+  
+  // Bordure de la barre
+  ctx.strokeStyle = 'white';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(progressBarX, progressBarY, progressBarWidth, progressBarHeight);
+  
+  // Affichage des ennemis restants
+  ctx.font = '14px Arial';
+  ctx.fillStyle = 'white';
+  ctx.textAlign = 'center';
+  ctx.fillText(`${stageSystem.enemiesDefeated}/${stageSystem.enemiesPerStage}`, CANVAS_WIDTH / 2, progressBarY + progressBarHeight + 15);
+  
+  // Retour au style de base pour les autres éléments du HUD
+  ctx.textAlign = 'left';
+  
+  // Affichage des armes
   if (player.weapon !== 'normal') {
     ctx.fillText("Arme : " + player.weapon, 10, 80);
     ctx.fillText("Temps restant : " + Math.ceil(player.weaponTimer / 1000) + "s", 10, 105);
@@ -30,6 +65,14 @@ function drawDebugInfo() {
   ctx.fillText(`Vitesse joueur: ${player.speed.toFixed(2)}`, 10, y);
   y += lineHeight;
   ctx.fillText(`Cadence de tir: ${(1000/shotCooldown).toFixed(1)}/s`, 10, y);
+  y += lineHeight;
+  
+  // Info sur le stage actuel
+  ctx.fillText(`Stage: ${stageSystem.currentStage}/${stageSystem.maxStage}`, 10, y);
+  y += lineHeight;
+  ctx.fillText(`Ennemis vaincus: ${stageSystem.enemiesDefeated}/${stageSystem.enemiesPerStage}`, 10, y);
+  y += lineHeight;
+  ctx.fillText(`Temps stage: ${Math.floor((Date.now() - stageSystem.stageStartTime)/1000)}s`, 10, y);
   y += lineHeight;
   
   // Stats des ennemis

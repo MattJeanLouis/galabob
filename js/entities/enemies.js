@@ -7,7 +7,7 @@ let enemyShotTimer = 0;
 const enemyShotInterval = 2000; // en ms
 
 // Création d'un ennemi
-function createEnemy(x, y, type, pattern = ENEMY_PATTERNS.PATROL) {
+function createEnemy(x, y, type, stage = 1, pattern = ENEMY_PATTERNS.PATROL) {
   let enemy = { 
     x, 
     y, 
@@ -20,27 +20,38 @@ function createEnemy(x, y, type, pattern = ENEMY_PATTERNS.PATROL) {
     startY: y,
     active: false,
     angle: 0,
-    diving: false
+    diving: false,
+    hasEntered: false, // Indique si l'ennemi est entré complètement dans l'écran
+    targetY: y // Position Y cible pour l'entrée progressive
   };
 
-  // Calculer le multiplicateur de vitesse basé sur le score
-  const speedMultiplier = Math.min(
+  // Calculer le multiplicateur de vitesse basé sur le stage et le score
+  const stageMultiplier = 1 + (stage - 1) * 0.1;
+  const scoreMultiplier = Math.min(
     1 + (score * SPEED_CONFIG.SPEED_INCREMENT),
     SPEED_CONFIG.MAX_SPEED_MULTIPLIER
   );
+  
+  const totalSpeedMultiplier = stageMultiplier * scoreMultiplier;
 
   if (type === "normal") {
     enemy.color = 'lime';
-    enemy.hp = 1;
-    enemy.speedModifier = 1 * speedMultiplier;
+    enemy.hp = Math.ceil(1 * stageMultiplier);
+    enemy.speedModifier = 1 * totalSpeedMultiplier;
+    enemy.shotChance = 0.001 * stageMultiplier;
+    enemy.points = 10;
   } else if (type === "shooter") {
     enemy.color = 'red';
-    enemy.hp = 2;
-    enemy.speedModifier = 0.8 * speedMultiplier;
+    enemy.hp = Math.ceil(2 * stageMultiplier);
+    enemy.speedModifier = 0.8 * totalSpeedMultiplier;
+    enemy.shotChance = 0.005 * stageMultiplier;
+    enemy.points = 20;
   } else if (type === "fast") {
     enemy.color = 'orange';
-    enemy.hp = 1;
-    enemy.speedModifier = 1.2 * speedMultiplier;
+    enemy.hp = Math.ceil(1 * stageMultiplier);
+    enemy.speedModifier = 1.5 * totalSpeedMultiplier;
+    enemy.shotChance = 0.002 * stageMultiplier;
+    enemy.points = 15;
   }
   return enemy;
 }
@@ -75,129 +86,151 @@ function createEnemies() {
   }
 }
 
-// Gestion du mouvement des ennemis
+// Mise à jour du mouvement des ennemis en fonction de leur pattern
 function updateEnemyMovement(enemy, deltaTime) {
-  const time = Date.now() / 1000;
-  
-  if (!enemy.diving) {
-    // Mouvement de patrouille de base
-    enemy.x = enemy.startX + Math.sin(time) * 30;
-    enemy.y = enemy.startY + Math.sin(time * 0.5) * 10;
+  // Si l'ennemi n'a pas encore atteint sa position initiale (entrée progressive)
+  if (!enemy.hasEntered) {
+    // Déplacer l'ennemi vers sa position cible
+    const entrySpeed = enemy.speedModifier * 3; // Entrée plus rapide que le mouvement normal
     
-    // Chance de commencer une plongée
-    if (Math.random() < 0.001 * enemy.speedModifier) {
-      enemy.diving = true;
-      enemy.angle = 0;
-      enemy.diveStartX = enemy.x;
-      enemy.diveStartY = enemy.y;
+    if (enemy.y < enemy.targetY) {
+      enemy.y += entrySpeed;
+      
+      // Si l'ennemi a atteint sa position cible
+      if (enemy.y >= enemy.targetY) {
+        enemy.y = enemy.targetY;
+        enemy.hasEntered = true;
+      }
+      
+      // Pendant l'entrée, ne pas appliquer d'autres mouvements
+      return;
+    } else {
+      enemy.hasEntered = true;
     }
-  } else {
-    // Gestion des différents patterns de plongée
-    switch(enemy.pattern) {
-      case ENEMY_PATTERNS.DIVE:
-        // Plongée en arc simple
-        enemy.angle += deltaTime * 0.002 * enemy.speedModifier;
-        enemy.x = enemy.diveStartX + Math.sin(enemy.angle) * 200;
-        enemy.y = enemy.diveStartY + Math.sin(enemy.angle * 0.5) * 300;
+  }
+
+  // Pattern de patrouille - déplacement horizontal avec rebonds
+  if (enemy.pattern === ENEMY_PATTERNS.PATROL) {
+    enemy.x += enemySpeed * enemyDirection * enemy.speedModifier;
+    return;
+  }
+  
+  // Pattern de plongée - mouvement en arc vers le joueur
+  if (enemy.pattern === ENEMY_PATTERNS.DIVE) {
+    if (!enemy.diving) {
+      // Commencer la plongée sur un nombre aléatoire
+      if (Math.random() < 0.005 * enemy.speedModifier) {
+        enemy.diving = true;
+        enemy.patternStep = 0;
+        // Sauvegarder la position de départ
+        enemy.startX = enemy.x;
+        enemy.startY = enemy.y;
+        // Cibler la position du joueur
+        enemy.targetX = player.x;
+        enemy.targetY = CANVAS_HEIGHT - 100;
+      }
+    } else {
+      // Exécuter la plongée
+      enemy.patternStep += deltaTime * 0.001 * enemy.speedModifier;
+      
+      if (enemy.patternStep < 1) {
+        // Phase de descente en arc
+        const arcX = enemy.startX + (enemy.targetX - enemy.startX) * enemy.patternStep;
+        const arcY = enemy.startY + 
+          (enemy.targetY - enemy.startY) * (Math.sin(enemy.patternStep * Math.PI) * 0.8 + enemy.patternStep * 0.2);
         
-        // Retour en formation si l'arc est complet
-        if (enemy.angle >= Math.PI) {
-          enemy.diving = false;
-          enemy.x = enemy.startX;
-          enemy.y = enemy.startY;
-        }
-        break;
+        enemy.x = arcX;
+        enemy.y = arcY;
+      } else if (enemy.patternStep < 2) {
+        // Phase de remontée
+        const returnStep = enemy.patternStep - 1;
+        const returnX = enemy.targetX + (enemy.startX - enemy.targetX) * returnStep;
+        const returnY = enemy.targetY + (enemy.startY - enemy.targetY) * returnStep;
         
-      case ENEMY_PATTERNS.SWEEP:
-        // Mouvement en S
-        enemy.angle += deltaTime * 0.001 * enemy.speedModifier;
-        enemy.x = enemy.diveStartX + Math.sin(enemy.angle * 2) * 150;
-        enemy.y = enemy.diveStartY + enemy.angle * 50;
-        
-        // Retour en formation après une certaine distance
-        if (enemy.angle >= Math.PI * 2) {
-          enemy.diving = false;
-          enemy.x = enemy.startX;
-          enemy.y = enemy.startY;
-        }
-        break;
-        
-      default: // PATROL
-        // Simple descente et remontée
-        enemy.angle += deltaTime * 0.001 * enemy.speedModifier;
-        enemy.y = enemy.diveStartY + Math.sin(enemy.angle) * 200;
-        
-        if (enemy.angle >= Math.PI) {
-          enemy.diving = false;
-          enemy.x = enemy.startX;
-          enemy.y = enemy.startY;
-        }
-        break;
+        enemy.x = returnX;
+        enemy.y = returnY;
+      } else {
+        // Fin de la plongée
+        enemy.diving = false;
+        enemy.x = enemy.startX;
+        enemy.y = enemy.startY;
+      }
+      return;
     }
   }
   
-  // Maintenir les ennemis dans les limites de l'écran
-  enemy.x = Math.max(0, Math.min(enemy.x, CANVAS_WIDTH - enemy.width));
-  enemy.y = Math.max(0, Math.min(enemy.y, CANVAS_HEIGHT - enemy.height));
+  // Pattern de balayage - mouvement sinusoïdal
+  if (enemy.pattern === ENEMY_PATTERNS.SWEEP) {
+    enemy.patternStep += deltaTime * 0.001 * enemy.speedModifier;
+    enemy.x = enemy.startX + Math.sin(enemy.patternStep) * 100;
+    return;
+  }
 }
 
-// Mise à jour de tous les ennemis
+// Mise à jour des ennemis
 function updateEnemies(deltaTime) {
-  // Déplacement horizontal et rebond des ennemis
-  let needReverse = false;
+  // Déplacement des ennemis
+  let hitEdge = false;
+  
+  // Vérifier si un ennemi touche un bord
   enemies.forEach(enemy => {
-    enemy.x += enemySpeed * enemyDirection * enemy.speedModifier;
-    if (enemy.x <= 0 || enemy.x + enemy.width >= CANVAS_WIDTH) {
-      needReverse = true;
+    if (!enemy.diving && enemy.hasEntered) {
+      if ((enemyDirection === 1 && enemy.x + enemy.width > CANVAS_WIDTH - 10) ||
+          (enemyDirection === -1 && enemy.x < 10)) {
+        hitEdge = true;
+      }
     }
   });
-  if (needReverse) {
+  
+  // Si un ennemi a touché un bord, changer de direction et descendre
+  if (hitEdge) {
     enemyDirection *= -1;
     enemies.forEach(enemy => {
-      enemy.y += enemyDrop;
+      if (enemy.hasEntered && !enemy.diving) {
+        enemy.y += enemyDrop;
+      }
     });
   }
-
-  // Mise à jour du mouvement avancé des ennemis
+  
+  // Mise à jour de chaque ennemi
   enemies.forEach(enemy => {
     updateEnemyMovement(enemy, deltaTime);
-  });
-  
-  // Tir des ennemis
-  enemyShotTimer += deltaTime;
-  if (enemyShotTimer > enemyShotInterval && enemies.length > 0) {
-    // Privilégier les ennemis de type shooter
-    let shooterCandidates = enemies.filter(e => e.type === "shooter");
-    let shooter;
-    if (shooterCandidates.length > 0) {
-      shooter = shooterCandidates[Math.floor(Math.random() * shooterCandidates.length)];
-    } else {
-      shooter = enemies[Math.floor(Math.random() * enemies.length)];
+    
+    // Tir des ennemis
+    if (enemy.hasEntered && Math.random() < enemy.shotChance) {
+      enemyBullets.push({
+        x: enemy.x + enemy.width / 2 - 2,
+        y: enemy.y + enemy.height,
+        width: 4,
+        height: 10,
+        speed: 5,
+        color: 'yellow'
+      });
     }
-    enemyBullets.push({
-      x: shooter.x + shooter.width / 2 - 2.5,
-      y: shooter.y + shooter.height,
-      width: 5,
-      height: 10,
-      speed: 3,
-      color: 'orange'
-    });
-    enemyShotTimer = 0;
-  }
+  });
 }
 
-// Dessin des ennemis
+// Affichage des ennemis
 function drawEnemies() {
   enemies.forEach(enemy => {
-    let grad = ctx.createLinearGradient(enemy.x, enemy.y, enemy.x, enemy.y + enemy.height);
-    grad.addColorStop(0, enemy.color);
-    grad.addColorStop(1, '#000');
-    ctx.fillStyle = grad;
+    ctx.fillStyle = enemy.color;
     ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
-    if (enemy.type !== 'normal') {
-      ctx.fillStyle = 'white';
-      ctx.font = '10px Arial';
-      ctx.fillText(enemy.type, enemy.x + 2, enemy.y + enemy.height - 2);
+    
+    // Dessiner la santé (uniquement pour les ennemis avec plus de 1 HP)
+    if (enemy.hp > 1) {
+      const healthBarWidth = enemy.width * 0.8;
+      const healthBarHeight = 4;
+      const healthBarX = enemy.x + (enemy.width - healthBarWidth) / 2;
+      const healthBarY = enemy.y - healthBarHeight - 2;
+      
+      // Fond de la barre de vie
+      ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
+      ctx.fillRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight);
+      
+      // Barre de vie
+      const healthPercentage = enemy.hp / (enemy.type === 'shooter' ? 2 : 1);
+      ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
+      ctx.fillRect(healthBarX, healthBarY, healthBarWidth * healthPercentage, healthBarHeight);
     }
   });
 } 
