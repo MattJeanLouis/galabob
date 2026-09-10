@@ -153,9 +153,13 @@ function menaceFor(stage, loop) {
     bossMenace: clamp(1 + p * 2.0, 1, 6),
 
     /* --- effectifs --- */
-    budget: Math.round(clamp(lerp(14, 48, k) * (1 + sur * 0.22), 12, 92)),
-    premiereVague: Math.round(clamp(lerp(5, 18, k) * (1 + sur * 0.12), 4, 26)),
-    fieldTarget: Math.round(clamp(lerp(5, 14, k) * (1 + sur * 0.18), 4, 22)),
+    // Recalibré sur la cadence de tir réelle : TEMPO.PLAYER_FIRE_INTERVAL est
+    // passé de 300 ms à 110 ms (~9 tirs/s) et les balles vont 2,7x plus vite.
+    // L'ancien budget lerp(14, 48) était dimensionné pour l'ancienne cadence :
+    // les stages se soldaient en quelques secondes. Remonté d'autant.
+    budget: Math.round(clamp(lerp(32, 96, k) * (1 + sur * 0.22), 26, 190)),
+    premiereVague: Math.round(clamp(lerp(8, 22, k) * (1 + sur * 0.12), 6, 26)),
+    fieldTarget: Math.round(clamp(lerp(8, 18, k) * (1 + sur * 0.18), 7, 22)),
     fieldReinforce: 0,                 // calculé juste après (dépend de fieldTarget)
 
     /* --- feu ---
@@ -341,9 +345,10 @@ function compositionDebloquee(formation, choreographie, stageEq) {
  * ========================================================================== */
 function calculerRangStage(stats, m) {
   const budget = Math.max(1, (m && m.budget) || 20);
-  // Temps « attendu » : ~1,9 s par ennemi du budget (le champ se repeuple, il
-  // faut aller les chercher) plus 8 s d'installation de la première vague.
-  const par = budget * 1.9 + 8;
+  // Temps « attendu » par ennemi du budget, plus l'installation de la première
+  // vague. Calibré sur la cadence actuelle (~9 tirs/s) : à 1,9 s par ennemi,
+  // hérité de l'ancienne cadence, le rang S était acquis d'office.
+  const par = budget * 0.95 + 6;
   const t = Math.max(0.001, (stats.timeElapsed || 0) / 1000);
   const comboMax = TEMPO.COMBO_MAX || 8;
 
