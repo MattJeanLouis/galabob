@@ -104,6 +104,11 @@ const BOSS = (function () {
 
     /* --- plafonds de sécurité --------------------------------------------- */
     maxBalles: 150,        // balles ennemies simultanées tolérées par le boss
+    // Durée MAXIMALE de poursuite d'un drone, en secondes. Au-delà, il rompt
+    // et sort par le bas. Sans cette limite, un drone qui atteint la hauteur
+    // du joueur devient inévitable : le joueur ne bouge que latéralement, il
+    // n'a aucun axe de fuite. Un poursuivant doit faire UNE passe, pas camper.
+    dureeChasse: 2.4,
     maxDrones: 16,
     maxRayons: 12,
     vieBalle: 11           // s — au-delà, une balle de boss est recyclée
@@ -773,7 +778,19 @@ const BOSS = (function () {
         const k = Math.pow(0.02, dt);
         d.vx *= k; d.vy *= k;
         if (d.vie > 0.55) d.etat = 'chasse';
+      } else if (d.etat === 'rupture') {
+        // Passe terminée : piqué vers le bas, plus AUCUNE correction de cap.
+        // C'est ce qui rend le drone esquivable — sa trajectoire est figée,
+        // le joueur peut la lire et s'écarter.
+        d.vx *= Math.pow(0.25, dt);
+        d.vy += 1150 * dt;
+        if (d.vy > 760) d.vy = 760;
       } else {
+        // Chasse BORNÉE dans le temps et en hauteur : au-delà, on rompt.
+        if (d.vie > REGLAGES.dureeChasse || d.y > H * 0.70) {
+          d.etat = 'rupture';
+          d.flash = 0.5;                    // éclat : la rupture est télégraphiée
+        }
         // Chasse : cap tenu vers le joueur, avec une dérive sinusoïdale qui
         // rend la trajectoire lisible sans la rendre triviale à esquiver.
         const cible = Math.atan2(p.y - d.y, p.x - d.x);
