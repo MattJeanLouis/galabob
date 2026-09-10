@@ -6,7 +6,7 @@
 
 ## Ce que c'est
 
-Un Galaga repensé pour la sensation. Tout ce qui bouge laisse une traînée lumineuse, tout ce qui meurt explose en gerbe, et chaque impact fige brièvement l'image avant de secouer la caméra.
+Un hommage à Galaga, repensé pour la sensation. Tout ce qui bouge laisse une traînée lumineuse, tout ce qui meurt explose en gerbe, et chaque impact fige brièvement l'image avant de secouer la caméra.
 
 ![Une partie en cours](docs/combat.jpg)
 

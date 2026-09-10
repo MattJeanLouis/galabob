@@ -914,7 +914,7 @@ function drawMenu() {
   let titleSize = clamp(CANVAS_WIDTH * 0.082, 40, 104) * (CANVAS_HEIGHT < 560 ? 0.78 : 1);
   // ajustement pour ne jamais déborder
   while (titleSize > 26 &&
-         UIKIT.vectorWidth('GALAGA', titleSize, { tracking: titleSize * 0.34 }) > CANVAS_WIDTH * 0.78) {
+         UIKIT.vectorWidth('GALABOB', titleSize, { tracking: titleSize * 0.34 }) > CANVAS_WIDTH * 0.78) {
     titleSize *= 0.94;
   }
 
@@ -922,7 +922,7 @@ function drawMenu() {
   const breathe = 1 + UIKIT.osc(0.22, 0.012);
   const tSize = titleSize * breathe * clamp(inTitle, 0, 1.06);
 
-  UIKIT.vectorTitle(c, 'GALAGA', cx, titleTop, tSize, PALETTE.ui.text, {
+  UIKIT.vectorTitle(c, 'GALABOB', cx, titleTop, tSize, PALETTE.ui.text, {
     align: 'center',
     slant: 0.08,
     tracking: tSize * 0.34,
@@ -948,7 +948,7 @@ function drawMenu() {
     c.clip();
     c.translate(0, (titleTop + tSize) * 1.5 + 8 * S);
     c.scale(1, -0.5);
-    UIKIT.vector(c, 'GALAGA', cx, titleTop, tSize, PALETTE.ui.accent, {
+    UIKIT.vector(c, 'GALABOB', cx, titleTop, tSize, PALETTE.ui.accent, {
       align: 'center', slant: 0.08, tracking: tSize * 0.34,
       width: Math.max(1, tSize * 0.045), alpha: 0.16 * clamp(inTitle, 0, 1), halo: false, passes: 2
     });
