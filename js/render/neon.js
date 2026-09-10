@@ -433,14 +433,33 @@ const NEON = (function () {
     // des ressources fait chuter le framerate sans que le rendu soit en cause.
     if (FRAME.frame < 600) return;
     if (typeof gameState !== 'undefined' && gameState !== 'playing') return;
-    if (FRAME.fps < 45) {
+    // SEUIL À 57, ET NON 45. Rater la synchronisation verticale d'une fraction
+    // de milliseconde fait alterner l'affichage entre 60 et 30 fps : une frame
+    // médiane à 17,9 ms pour un budget de 16,7 saccade DAVANTAGE qu'un 45 fps
+    // stable. On dégrade donc bien avant l'effondrement, tant qu'il est encore
+    // temps de repasser sous le budget.
+    if (FRAME.fps < 57) {
       S.slowFrames++;
-      if (S.slowFrames > 90 && RENDER_CONFIG.quality > 0) {
-        RENDER_CONFIG.quality--;
+      if (S.slowFrames > 90) {
         S.slowFrames = 0;
-        console.info('NEON : qualité rétrogradée à', RENDER_CONFIG.quality);
+        // On sacrifie D'ABORD la résolution. Le coût est proportionnel à la
+        // surface, donc c'est le levier le plus efficace — et un pixel ratio
+        // plus bas se remarque bien moins que la perte du bloom.
+        const r = RENDER_CONFIG.maxPixelRatio;
+        if (r > 1.25) {
+          RENDER_CONFIG.maxPixelRatio = 1.25;
+          if (typeof resizeCanvas === 'function') resizeCanvas();
+          console.info('NEON : résolution ramenée à 1.25x');
+        } else if (r > 1) {
+          RENDER_CONFIG.maxPixelRatio = 1;
+          if (typeof resizeCanvas === 'function') resizeCanvas();
+          console.info('NEON : résolution ramenée à 1x');
+        } else if (RENDER_CONFIG.quality > 0) {
+          RENDER_CONFIG.quality--;
+          console.info('NEON : qualité rétrogradée à', RENDER_CONFIG.quality);
+        }
       }
-    } else if (FRAME.fps > 52) {
+    } else if (FRAME.fps > 59) {
       S.slowFrames = 0;   // un retour au plein régime annule le compteur
     }
   }
