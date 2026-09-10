@@ -23,3 +23,6 @@ Thumbs.db
 /node_modules/
 /dist/
 /build/ 
+
+# Artefacts des tests navigateur (captures, traces MCP Playwright)
+/.playwright-mcp/

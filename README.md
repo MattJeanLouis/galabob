@@ -1,114 +1,68 @@
-# Galaga – Édition Améliorée
+# GALABOB
 
-Un jeu inspiré de Galaga, développé en JavaScript avec HTML Canvas.
-
-## Structure du Projet
-
-Le projet est organisé comme suit:
+**Un shoot'em up néon vectoriel en JavaScript pur.** Pas de moteur, pas de framework, pas de build : du Canvas 2D et rien d'autre.
 
 ```
-/
-├── index.html            # Page HTML principale
-├── css/
-│   └── style.css         # Styles CSS
-├── js/
-│   ├── audio.js          # Gestion du système audio
-│   ├── game.js           # Logique principale du jeu
-│   ├── main.js           # Point d'entrée et initialisation
-│   ├── utils.js          # Fonctions utilitaires
-│   ├── core/
-│   │   ├── config.js     # Configuration et constantes
-│   │   └── input.js      # Gestion des entrées utilisateur
-│   ├── entities/
-│   │   ├── stars.js      # Gestion du fond étoilé
-│   │   ├── player.js     # Logique du joueur
-│   │   ├── enemies.js    # Logique des ennemis
-│   │   ├── projectiles.js # Gestion des projectiles
-│   │   ├── effects.js    # Effets visuels (explosions, etc.)
-│   │   └── powerups.js   # Gestion des power-ups
-│   └── ui/
-│       ├── menus.js      # Menus du jeu
-│       └── hud.js        # Affichage HUD
-└── assets/
-    └── audio/
-        ├── musique/      # Fichiers audio pour la musique
-        └── narration/    # Fichiers audio pour les narrations
+                    ▲̵̶
+                   ╱╲╲        ✵ · ✦ · ✵
+                  ╱  ╲╲      ·  ✧  ·  ✦
+                 ═════▲═════
+                      ║║
 ```
 
-## Fonctionnalités
+## Ce que c'est
 
-- Système de jeu classique inspiré de Galaga
-- Différents types d'ennemis avec des comportements variés
-- Power-ups pour améliorer les armes du joueur
-- Système audio avancé avec musique et narrations
-- Système de combo pour le scoring
-- Effets visuels (explosions, débris, screen shake)
-- Menu de paramètres avec options audio
-- Mode debug pour afficher des statistiques en temps réel
+Un Galaga repensé pour la sensation. Tout ce qui bouge laisse une traînée lumineuse, tout ce qui meurt explose en gerbe, et chaque impact fige brièvement l'image avant de secouer la caméra.
 
-## Comment lancer le jeu
+## Ce qu'il y a dedans
 
-⚠️ **Important** : Le jeu utilise des requêtes `fetch()` pour détecter et charger les fichiers audio. Pour des raisons de sécurité (CORS), ces requêtes sont bloquées lorsque vous ouvrez directement le fichier HTML sans serveur web.
+**Le rendu.** Un moteur de bloom maison : la scène est dessinée dans un buffer émissif hors-écran, flouté en deux passes, puis recomposé en additif. Par-dessus, aberration chromatique et vignette. Les vaisseaux sont des tracés vectoriels — noyau clair, halo saturé — jamais des formes pleines.
 
-Pour que le jeu fonctionne correctement avec l'audio, vous devez l'exécuter via un serveur web local :
+**Le ressenti.** Hitstop à cumul amorti, screenshake par trauma piloté par un bruit lissé, flash plein écran, recul d'arme, éclat au canon. La hitbox du joueur est réduite à quelques pixels, façon Ikaruga : on frôle sans mourir.
 
-### Option 1 : Python (méthode simple)
-Si Python est installé sur votre ordinateur :
+**Les traînées.** Buffer persistant atténué par purge roulante — chaque frame nettoie une bande différente, ce qui casse l'arrondi 8 bits et permet des traînées longues sans le voile résiduel qui les accompagne d'habitude.
+
+**Le monde.** 20 stages, chacun avec son ciel : nébuleuses, planètes vectorielles à anneaux, lunes en orbite. Comètes, pluies de météores, éclipses et tempêtes magnétiques traversent le décor. Le fond réagit au jeu — il pulse aux explosions et vire au rouge quand la dernière vie s'approche.
+
+**Les boss.** Un tous les cinq stages, en trois phases chacun. *La Ruche* libère des essaims. *Le Prisme* se scinde en fragments qui renvoient ses rayons. *Le Serpent* ondule et perd ses segments un par un. *Le Cœur* recombine les trois.
+
+**L'arsenal.** Treize power-ups sur trois emplacements indépendants : une arme (laser perforant, missiles chercheurs, mitraille, onde), un bouclier, et des modificateurs cumulables (ralenti, aimant, multiplicateur). Laser niveau 3 + bouclier + multiplicateur se combinent.
+
+**Le son.** Entièrement synthétisé en Web Audio — aucun fichier audio. Chaque bruitage est généré à la volée avec une légère variation pour ne jamais lasser.
+
+## Jouer
+
+Le jeu a besoin d'un serveur local (les modules sont chargés par HTTP) :
 
 ```bash
-# Pour Python 3
-python -m http.server
-
-# Pour Python 2
-python -m SimpleHTTPServer
+python3 -m http.server 8000
 ```
 
-Puis accédez à http://localhost:8000 dans votre navigateur.
+Puis ouvrir <http://localhost:8000>.
 
-### Option 2 : Node.js
-Si vous avez Node.js installé :
+| Touche | Action |
+|---|---|
+| ← → | Déplacer |
+| Espace | Tirer (maintenir pour l'auto-fire) |
+| P | Pause |
+| A | Réglages audio |
+| F3 | Statistiques de debug |
 
-```bash
-# Installer http-server globalement (à faire une seule fois)
-npm install -g http-server
+Pour ajouter tes propres musiques : dépose des fichiers dans `assets/audio/musique/` et déclare-les dans `assets/audio/manifest.json`.
 
-# Lancer le serveur
-http-server
+## Sous le capot
+
+Tout le mouvement est exprimé en **pixels par seconde** et intégré avec le delta-time : le jeu se comporte identiquement à 30, 60 ou 144 Hz. Le canvas suit le `devicePixelRatio`, donc le rendu est net sur écran Retina. Une frame complète coûte environ **4 ms** en 3024×1890, soit un quart du budget d'un affichage à 60 Hz.
+
 ```
-
-Puis accédez à http://localhost:8080 dans votre navigateur.
-
-### Option 3 : Éditeurs de code
-- **VS Code** : Installez l'extension "Live Server" et lancez votre projet avec un clic droit sur `index.html` -> "Open with Live Server"
-- **WebStorm/PhpStorm** : Utilisez le serveur intégré
-
-## Contrôles
-
-- **Flèches gauche/droite** : Déplacer le vaisseau
-- **Espace** : Tirer
-- **P** : Pause
-- **ESC** : Quitter/Menu principal
-- **A** : Afficher/Masquer les réglages audio
-- **M** : Changer la musique
-- **N** : Déclencher une narration
-- **F3** : Afficher/Masquer les statistiques de debug
-
-## Configuration Audio
-
-Le jeu recherche automatiquement les fichiers audio dans les dossiers:
-- `assets/audio/musique/` pour les musiques de fond
-- `assets/audio/narration/` pour les narrations
-
-Vous pouvez ajouter vos propres fichiers dans ces dossiers et le jeu les détectera automatiquement.
-
-## Développement
-
-Pour contribuer au projet:
-
-1. Cloner ce dépôt
-2. Ajouter/modifier des fonctionnalités dans les fichiers JavaScript correspondants
-3. Tester en lançant le jeu via un serveur web local (voir instructions ci-dessus)
+js/
+├── core/       config, palette, entrées, stages
+├── entities/   joueur, ennemis, boss, projectiles, effets, power-ups, étoiles
+├── render/     moteur néon (bloom), décors
+├── ui/         HUD, menus
+└── audio/      synthèse procédurale
+```
 
 ## Licence
 
-Ce projet est libre d'utilisation à des fins éducatives. 
+Libre d'utilisation à des fins éducatives.

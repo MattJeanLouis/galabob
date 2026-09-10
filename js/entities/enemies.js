@@ -1,608 +1,1225 @@
-// Variables de gestion des ennemis
+/* =============================================================================
+ *  galabob — ENNEMIS
+ * -----------------------------------------------------------------------------
+ *  Réécriture complète : néon vectoriel, delta-time, danger réel.
+ *
+ *  CE QUI A ÉTÉ RÉPARÉ (bugs bloquants du diagnostic)
+ *  --------------------------------------------------
+ *  1. LA FORMATION NE SE DÉPLAÇAIT JAMAIS. L'ancien code faisait
+ *        enemy.x += enemySpeed * enemyDirection
+ *     puis, deux fonctions plus loin, recalculait
+ *        enemy.x = enemy.startX + sin(...)
+ *     ce qui annulait purement et simplement le déplacement. Désormais le
+ *     va-et-vient est porté par une ANCRE DE FORMATION (e.formationX/formationY)
+ *     et la respiration sinusoïdale n'est qu'un OFFSET appliqué par-dessus.
+ *  2. FORMATION DIAMOND : calculateFormationPositions() renvoyait moins de
+ *     positions que d'ennemis demandés (8 pour 16), createFormation lisait donc
+ *     entryPaths[i].start sur undefined -> TypeError silencieuse -> stage vide.
+ *     La géométrie est corrigée ET toutes les formations sont désormais
+ *     garanties de renvoyer EXACTEMENT `count` positions (padding de secours).
+ *  3. Toutes les probabilités sont PAR SECONDE et normalisées par le delta-time
+ *     (avant : Math.random() < 0.0001 PAR FRAME, soit une plongée toutes les
+ *     ~3 minutes par ennemi).
+ *  4. Le multiplicateur 0.3 sur shotChance est supprimé, les cadences viennent
+ *     de TEMPO.ENEMY_SHOT_CHANCE_PER_SEC.
+ *  5. Plus aucun Date.now() pour animer : FRAME.time (temps de JEU) partout.
+ *  6. Plus de [...enemies].filter().sort() par frame dans drawEnemies().
+ *  7. createEnemy() n'est plus du code mort avec des couleurs CSS 'lime'/'red' :
+ *     c'est LA fabrique unique, alimentée par la table ENEMY_TYPES ci-dessous.
+ *
+ *  CONVENTION DE TEMPS (js/core/config.js)
+ *  ---------------------------------------
+ *      vitesses en PX CSS / SECONDE     durées en MS     probabilités / SECONDE
+ *      pos += vitesse * dt              avec dt = deltaTime / 1000
+ *      dt PEUT VALOIR 0 (hitstop, pause) : on ne fait alors rien.
+ *
+ *  RENDU
+ *  -----
+ *  Tout passe par NEON.* (js/render/neon.js) et PALETTE (js/core/palette.js).
+ *  Aucune couleur en dur, aucun fillRect : des silhouettes VECTORIELLES.
+ * ========================================================================== */
+
+/* -----------------------------------------------------------------------------
+ *  ÉTAT GLOBAL (noms conservés : game.js écrit dedans)
+ * -------------------------------------------------------------------------- */
 let enemies = [];
+
+// LEGACY : game.js fait `enemySpeed = 1` (initGame) puis `enemySpeed += 0.2`
+// à chaque nouvelle vague. On ne s'en sert plus comme d'une vitesse (elle était
+// en px/frame) mais comme d'un BONUS DE NERVOSITÉ cumulé au fil des vagues.
+// La vraie vitesse de formation est calculée par getFormationSpeed(), en px/s.
 let enemySpeed = 1;
-let enemyDirection = 1; // 1 = vers la droite, -1 = vers la gauche
-const enemyDrop = 20;
+
+let enemyDirection = 1;                      // 1 = vers la droite, -1 = vers la gauche
+const enemyDrop = TEMPO.FORMATION_DROP;      // px de descente au rebond sur un bord
+
+// Salve coordonnée : toutes les `enemyShotInterval` ms, la rangée avant tire
+// ensemble. Donne un RYTHME à la pression, au lieu d'un crépitement uniforme.
 let enemyShotTimer = 0;
-const enemyShotInterval = 2000; // en ms
+const enemyShotInterval = 2600;              // ms
 
-// Création d'un ennemi
-function createEnemy(x, y, type, stage = 1, pattern = ENEMY_PATTERNS.PATROL) {
-  // Calculer une taille aléatoire mais avec une taille minimale plus grande
-  // La taille de base est augmentée à 45-80 (au lieu de 40)
-  const sizeVariation = Math.random() * 0.5 + 0.8; // Entre 0.8 et 1.3 (80% à 130% de la taille de base)
-  const baseSize = 45 + Math.floor(Math.random() * 35); // Entre 45 et 80 de base
-  const size = Math.floor(baseSize * sizeVariation);
-  
-  let enemy = { 
-    x, 
-    y, 
-    width: size, 
-    height: size, 
-    type,
-    pattern,
-    patternStep: 0,
-    startX: x,
-    startY: y,
-    active: false,
-    angle: 0,
-    diving: false,
-    hasEntered: false, // Indique si l'ennemi est entré complètement dans l'écran
-    targetY: y, // Position Y cible pour l'entrée progressive
-    oscillationFrequency: 1 + Math.random() * 2, // Fréquence d'oscillation personnalisée
-    oscillationAmplitude: 10 + Math.random() * 20, // Amplitude d'oscillation personnalisée
-    movementPhase: Math.random() * Math.PI * 2, // Phase aléatoire pour désynchroniser
-    sinusoidalMovement: Math.random() > 0.5 // 50% de chance d'avoir un mouvement sinusoïdal supplémentaire
-  };
+// Accalmie après l'arrivée d'une vague : le joueur doit VOIR la chorégraphie
+// d'entrée avant d'être attaqué, sinon le spectacle est noyé et la première
+// mort arrive avant même que la formation soit en place.
+let waveGraceMs = 0;
 
-  // Calculer le multiplicateur de vitesse basé sur le stage et le score
-  const stageMultiplier = 1 + (stage - 1) * 0.1;
-  const scoreMultiplier = Math.min(
-    1 + (score * SPEED_CONFIG.SPEED_INCREMENT),
-    SPEED_CONFIG.MAX_SPEED_MULTIPLIER
-  );
-  
-  const totalSpeedMultiplier = stageMultiplier * scoreMultiplier;
+const TWO_PI = Math.PI * 2;
 
-  if (type === "normal") {
-    enemy.color = 'lime';
-    enemy.hp = Math.ceil(1 * stageMultiplier);
-    enemy.speedModifier = (0.8 + Math.random() * 0.4) * totalSpeedMultiplier; // Vitesse variable
-    enemy.shotChance = 0.0004 * stageMultiplier; // Réduit de 0.001 à 0.0004
-    enemy.points = 10;
-  } else if (type === "shooter") {
-    enemy.color = 'red';
-    enemy.hp = Math.ceil(2 * stageMultiplier);
-    enemy.speedModifier = (0.6 + Math.random() * 0.4) * totalSpeedMultiplier; // Vitesse variable
-    enemy.shotChance = 0.0015 * stageMultiplier; // Réduit de 0.005 à 0.0015
-    enemy.points = 20;
-  } else if (type === "fast") {
-    enemy.color = 'orange';
-    enemy.hp = Math.ceil(1 * stageMultiplier);
-    enemy.speedModifier = (1.2 + Math.random() * 0.6) * totalSpeedMultiplier; // Vitesse variable
-    enemy.shotChance = 0.0008 * stageMultiplier; // Réduit de 0.002 à 0.0008
-    enemy.points = 15;
+/* =============================================================================
+ *  TABLE UNIQUE DES CARACTÉRISTIQUES D'ENNEMIS
+ *  Avant : 8 tables divergentes (createEnemy, stages.js, design_ennemie.html…).
+ *  Maintenant : CECI, et rien d'autre. Les couleurs viennent de PALETTE.
+ * ========================================================================== */
+const ENEMY_TYPES = {
+  normal: {
+    key: 'normal',
+    paletteKey: 'enemy.normal',        // magenta franc
+    bulletKey: 'bullet.enemy.normal',
+    hp: 1, points: 10, size: 40,
+    speed: 1.00,                       // multiplicateur d'entrée / de plongée
+    shot: 'single', shotRate: 1.00,
+    shotSpeed: TEMPO.ENEMY_BULLET_SPEED,
+    cooldown: 620,                     // ms de repos minimum entre deux attaques
+    diveBias: 1.00
+  },
+  shooter: {
+    key: 'shooter',
+    paletteKey: 'enemy.shooter',       // violet électrique
+    bulletKey: 'bullet.enemy.shooter',
+    hp: 2, points: 20, size: 44,
+    speed: 0.82,
+    shot: 'burst3', shotRate: 0.55,
+    shotSpeed: TEMPO.ENEMY_BULLET_SPEED_SHOOTER,
+    cooldown: 900,
+    diveBias: 0.60
+  },
+  fast: {
+    key: 'fast',
+    paletteKey: 'enemy.fast',          // ambre / blanc chaud
+    bulletKey: 'bullet.enemy.fast',
+    hp: 1, points: 15, size: 34,
+    speed: 1.45,
+    shot: 'spread3', shotRate: 0.60,
+    shotSpeed: TEMPO.ENEMY_BULLET_SPEED * 1.06,
+    cooldown: 700,
+    diveBias: 1.80
+  },
+  elite: {
+    key: 'elite',
+    paletteKey: 'enemy.elite',         // rouge néon
+    bulletKey: 'bullet.enemy',
+    hp: 4, points: 40, size: 50,
+    speed: 1.10,
+    shot: 'fan5', shotRate: 0.34,      // 5 balles d'un coup : cadence réduite
+    shotSpeed: TEMPO.ENEMY_BULLET_SPEED_SHOOTER * 1.05,
+    cooldown: 1150,
+    diveBias: 1.15
   }
-  return enemy;
+};
+
+/** Caractéristiques d'un type. Ne renvoie JAMAIS undefined. */
+function enemyStats(type) {
+  return ENEMY_TYPES[type] || ENEMY_TYPES.normal;
 }
 
-// Cette fonction est maintenant dans stages.js
-// function createEnemies() { ... }
+/** Points de vie d'un type au stage donné (progression douce et lisible). */
+function enemyHpFor(type, stage) {
+  const st = enemyStats(type);
+  const bonus = Math.min(2, Math.floor(((stage || 1) - 1) / 4));
+  return st.hp + bonus;
+}
 
-// Fonction pour créer une vague d'ennemis (pour compatibilité avec game.js)
+/** Taille en px CSS, adaptée à la largeur de l'écran. */
+function enemySizeFor(type) {
+  const st = enemyStats(type);
+  const scale = clamp(CANVAS_WIDTH / 1200, 0.72, 1.25);
+  return Math.round(st.size * scale);
+}
+
+/* -----------------------------------------------------------------------------
+ *  RYTHME — tout est dérivé de TEMPO, plus une seule constante magique.
+ * -------------------------------------------------------------------------- */
+
+/** Vitesse latérale de la formation, en PX/SECONDE. */
+function getFormationSpeed() {
+  const stage = (typeof stageSystem !== 'undefined' && stageSystem.currentStage) || 1;
+  let v = TEMPO.FORMATION_SPEED + (stage - 1) * TEMPO.FORMATION_SPEED_PER_STAGE;
+  // Bonus hérité de `enemySpeed` (+0.2 par vague survivante dans le stage).
+  const legacy = (typeof enemySpeed === 'number' && isFinite(enemySpeed)) ? enemySpeed : 1;
+  v += clamp(legacy - 1, 0, 6) * 28;
+  return clamp(v, 70, TEMPO.FORMATION_SPEED_MAX);
+}
+
+/** Probabilité PAR SECONDE, PAR ENNEMI, de déclencher une plongée. */
+function getDiveChance(type, stage) {
+  const st = enemyStats(type);
+  const base = TEMPO.DIVE_CHANCE_PER_SEC + ((stage || 1) - 1) * TEMPO.DIVE_CHANCE_PER_STAGE;
+  return base * st.diveBias;
+}
+
+/** Probabilité PAR SECONDE, PAR ENNEMI, d'ouvrir le feu (avant pondération
+ *  par le nombre de balles du pattern). */
+function getEnemyShotChancePerSec(type, stage) {
+  const table = TEMPO.ENEMY_SHOT_CHANCE_PER_SEC || {};
+  const base = table[type] != null ? table[type] : 0.22;
+  return base * Math.pow(TEMPO.ENEMY_SHOT_STAGE_MULT, Math.max(0, (stage || 1) - 1));
+}
+
+/* =============================================================================
+ *  FABRIQUE UNIQUE
+ *  (l'ancien createEnemy — 58 lignes de code mort avec 'lime'/'red'/'orange' —
+ *   est remplacé par celle-ci, qui lit ENEMY_TYPES et PALETTE.)
+ * ========================================================================== */
+function createEnemy(x, y, type, stage, pattern) {
+  stage = stage || 1;
+  type = ENEMY_TYPES[type] ? type : 'normal';
+  const st = enemyStats(type);
+  const size = enemySizeFor(type);
+  const col = PALETTE.get(st.paletteKey);
+
+  const e = {
+    /* --- géométrie --- */
+    x: x, y: y,
+    width: size, height: size,
+    type: type,
+    pattern: pattern || ENEMY_PATTERNS.FORMATION,
+
+    /* --- ancre de formation : LE déplacement d'ensemble se fait ICI --- */
+    formationX: x, formationY: y,
+    startX: x, startY: y,          // miroirs legacy (utils.js les met à l'échelle)
+
+    /* --- combat --- */
+    hp: enemyHpFor(type, stage),
+    maxHp: enemyHpFor(type, stage),
+    points: st.points,
+    color: col.glow,               // compat : certains modules lisent e.color
+    speedModifier: st.speed * (0.92 + Math.random() * 0.16),
+
+    /* --- entrée --- */
+    hasEntered: false,
+    entryProgress: 0,
+    entryRate: 1,
+    entryDelay: 0,
+    entryPath: null,
+    targetX: x, targetY: y,
+
+    /* --- plongée : 'none' | 'telegraph' | 'dive' | 'return' --- */
+    diveState: 'none',
+    diving: false,                 // compat : game.js / anciens modules le lisent
+    diveTele: 0, diveTeleMax: TEMPO.DIVE_TELEGRAPH_MS,
+    diveT: 0, diveDur: TEMPO.DIVE_DURATION,
+    dv0x: 0, dv0y: 0, dv1x: 0, dv1y: 0, dv2x: 0, dv2y: 0, dv3x: 0, dv3y: 0,
+
+    /* --- armement --- */
+    charge: 0, chargeMax: TEMPO.ENEMY_SHOT_TELEGRAPH_MS,
+    shotCooldown: randRange(220, 900),
+    burstLeft: 0, burstTimer: 0, burstGap: 105,
+    aimAngle: Math.PI / 2,
+    muzzle: 0, muzzleAngle: Math.PI / 2,
+    diveAimX: x, diveAimY: CANVAS_HEIGHT * 0.8,
+
+    /* --- rendu --- */
+    hitFlash: 0, hitFlashMax: 90,
+    lastHitX: x, lastHitY: y,
+    faceAngle: 0,
+    vx: 0, vy: 0,
+    phase: Math.random() * TWO_PI,
+    formationIndex: 0,
+    _rt: true
+  };
+
+  return e;
+}
+
+/** Complète un ennemi créé ailleurs (repli de game.js, createSimpleEnemies…)
+ *  pour qu'il puisse marcher, plonger, tirer et se dessiner comme les autres. */
+function ensureEnemyRuntime(e) {
+  if (e._rt) return;
+  const type = ENEMY_TYPES[e.type] ? e.type : 'normal';
+  const st = enemyStats(type);
+  const stage = (typeof stageSystem !== 'undefined' && stageSystem.currentStage) || 1;
+
+  e.type = type;
+  e._rt = true;
+  if (typeof e.width !== 'number' || !(e.width > 0)) e.width = enemySizeFor(type);
+  if (typeof e.height !== 'number' || !(e.height > 0)) e.height = e.width;
+  // ANCRE DE FORMATION. Pour un ennemi qui n'est pas encore entré, l'ancre doit
+  // être sa DESTINATION (targetX/targetY), jamais sa position de départ : le
+  // repli d'urgence de game.js fait naître ses ennemis à y = -60, et les ancrer
+  // là les laisserait marcher au-dessus de l'écran, à jamais inatteignables —
+  // le stage ne pourrait plus se terminer.
+  if (typeof e.formationX !== 'number' || !isFinite(e.formationX)) {
+    if (e.hasEntered) {
+      e.formationX = (isFinite(e.startX) && e.startX !== 0) ? e.startX : e.x;
+    } else {
+      e.formationX = (isFinite(e.targetX) && e.targetX !== 0) ? e.targetX : e.x;
+    }
+  }
+  if (typeof e.formationY !== 'number' || !isFinite(e.formationY)) {
+    if (e.hasEntered) {
+      e.formationY = (isFinite(e.startY) && e.startY !== 0) ? e.startY : e.y;
+    } else {
+      e.formationY = (isFinite(e.targetY) && e.targetY > -e.height) ? e.targetY : Math.max(e.y, 90);
+    }
+  }
+  if (typeof e.hp !== 'number' || !(e.hp > 0)) e.hp = enemyHpFor(type, stage);
+  if (typeof e.maxHp !== 'number' || !(e.maxHp > 0)) e.maxHp = e.hp;
+  if (typeof e.points !== 'number' || !(e.points > 0)) e.points = st.points;
+  if (typeof e.speedModifier !== 'number' || !isFinite(e.speedModifier)) e.speedModifier = st.speed;
+  if (typeof e.pattern !== 'string') e.pattern = ENEMY_PATTERNS.PATROL;
+  if (typeof e.targetY !== 'number') e.targetY = e.y;
+  if (typeof e.targetX !== 'number') e.targetX = e.x;
+
+  e.color = PALETTE.get(st.paletteKey).glow;
+  // Une plongée héritée n'a pas de courbe : on la remet à zéro plutôt que de
+  // faire évaluer une Bézier sur des coordonnées absentes.
+  e.diveState = 'none';
+  e.diving = false;
+  if (typeof e.diveTele !== 'number') e.diveTele = 0;
+  e.diveTeleMax = TEMPO.DIVE_TELEGRAPH_MS;
+  if (typeof e.diveT !== 'number') e.diveT = 0;
+  if (typeof e.diveDur !== 'number') e.diveDur = TEMPO.DIVE_DURATION;
+  if (typeof e.charge !== 'number') e.charge = 0;
+  e.chargeMax = TEMPO.ENEMY_SHOT_TELEGRAPH_MS;
+  if (typeof e.shotCooldown !== 'number') e.shotCooldown = randRange(220, 900);
+  if (typeof e.burstLeft !== 'number') e.burstLeft = 0;
+  if (typeof e.burstTimer !== 'number') e.burstTimer = 0;
+  if (typeof e.burstGap !== 'number') e.burstGap = 105;
+  if (typeof e.aimAngle !== 'number') e.aimAngle = Math.PI / 2;
+  if (typeof e.muzzle !== 'number') e.muzzle = 0;
+  if (typeof e.muzzleAngle !== 'number') e.muzzleAngle = Math.PI / 2;
+  if (typeof e.diveAimX !== 'number') e.diveAimX = e.x;
+  if (typeof e.diveAimY !== 'number') e.diveAimY = CANVAS_HEIGHT * 0.8;
+  if (typeof e.hitFlash !== 'number') e.hitFlash = 0;
+  if (typeof e.hitFlashMax !== 'number') e.hitFlashMax = 90;
+  if (typeof e.faceAngle !== 'number') e.faceAngle = 0;
+  if (typeof e.phase !== 'number') e.phase = Math.random() * TWO_PI;
+  if (typeof e.formationIndex !== 'number') e.formationIndex = 0;
+  if (typeof e.entryProgress !== 'number') e.entryProgress = 0;
+  if (typeof e.entryRate !== 'number') e.entryRate = 1;
+  if (typeof e.entryDelay !== 'number') e.entryDelay = 0;
+  e.vx = e.vx || 0;
+  e.vy = e.vy || 0;
+}
+
+/* =============================================================================
+ *  CRÉATION DES FORMATIONS
+ * ========================================================================== */
+
+/** Marge latérale minimale d'une formation. */
+function formationMargin() { return clamp(CANVAS_WIDTH * 0.045, 22, 70); }
+
+/** Écart entre deux ennemis d'une formation, adapté à la largeur d'écran. */
+function formationSpacing() { return clamp(CANVAS_WIDTH / 15, 54, 88); }
+
+/** Hauteur de la première rangée. */
+function formationTopY() { return clamp(CANVAS_HEIGHT * 0.12, 78, 160); }
+
+/** Répartition des types pour une vague. Renvoie EXACTEMENT `count` entrées. */
+function buildTypeRoster(count, stage) {
+  let normalRatio = 0.70, shooterRatio = 0.15, fastRatio = 0.15, eliteRatio = 0;
+
+  if (stage >= 3) { normalRatio = 0.50; shooterRatio = 0.25; fastRatio = 0.25; eliteRatio = 0; }
+  if (stage >= 5) { normalRatio = 0.36; shooterRatio = 0.27; fastRatio = 0.27; eliteRatio = 0.10; }
+  if (stage >= 8) { normalRatio = 0.28; shooterRatio = 0.30; fastRatio = 0.28; eliteRatio = 0.14; }
+
+  const roster = [];
+  const nShooter = Math.round(count * shooterRatio);
+  const nFast = Math.round(count * fastRatio);
+  const nElite = Math.round(count * eliteRatio);
+  const nNormal = Math.max(0, count - nShooter - nFast - nElite);
+
+  for (let i = 0; i < nNormal; i++) roster.push('normal');
+  for (let i = 0; i < nShooter; i++) roster.push('shooter');
+  for (let i = 0; i < nFast; i++) roster.push('fast');
+  for (let i = 0; i < nElite; i++) roster.push('elite');
+  while (roster.length < count) roster.push('normal');
+  roster.length = count;
+
+  // Mélange de Fisher-Yates
+  for (let i = roster.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = roster[i]; roster[i] = roster[j]; roster[j] = tmp;
+  }
+  return roster;
+}
+
+/** Ajoute une rangée de `n` positions CENTRÉES sur centerX à l'ordonnée y. */
+function pushFormationRow(positions, n, y, spacing, centerX, limit) {
+  for (let c = 0; c < n && positions.length < limit; c++) {
+    positions.push({ x: centerX + (c - (n - 1) / 2) * spacing, y: y });
+  }
+}
+
+/** Positions FINALES d'une formation.
+ *  ⚠ Les positions renvoyées sont des CENTRES (px CSS), pas des coins.
+ *  GARANTIE : le tableau contient EXACTEMENT `count` entrées, quelle que soit
+ *  la formation. C'est la correction du bug DIAMOND (8 positions pour 16
+ *  ennemis -> entryPaths[i].start sur undefined -> stage vide). */
+function calculateFormationPositions(formationType, count) {
+  const positions = [];
+  const n = Math.max(1, Math.floor(count) || 1);
+  const centerX = CANVAS_WIDTH / 2;
+  const topY = formationTopY();
+  const spacing = formationSpacing();
+  const margin = formationMargin();
+  const maxCols = Math.max(2, Math.floor((CANVAS_WIDTH - margin * 2) / spacing));
+
+  switch (formationType) {
+
+    case FORMATIONS.DIAMOND: {
+      // Rangées symétriques 1,3,5,…,5,3,1 tronquées pour totaliser EXACTEMENT n.
+      let rows = 3;
+      while (rows < 11) {
+        let sum = 0;
+        for (let i = 0; i < rows; i++) sum += 1 + 2 * Math.min(i, rows - 1 - i);
+        if (sum >= n) break;
+        rows += 2;
+      }
+      let left = n;
+      for (let i = 0; i < rows && left > 0; i++) {
+        const ideal = Math.min(1 + 2 * Math.min(i, rows - 1 - i), maxCols);
+        const take = Math.min(ideal, left);
+        pushFormationRow(positions, take, topY + i * spacing * 0.86, spacing, centerX, n);
+        left -= take;
+      }
+      // Reliquat éventuel : une rangée de plus, au-dessous.
+      let extraRow = rows;
+      while (positions.length < n) {
+        const take = Math.min(maxCols, n - positions.length);
+        pushFormationRow(positions, take, topY + extraRow * spacing * 0.86, spacing, centerX, n);
+        extraRow++;
+      }
+      break;
+    }
+
+    case FORMATIONS.CIRCLE: {
+      // Ellipse (deux anneaux au-delà de 14 pour rester lisible).
+      const outer = n > 14 ? Math.ceil(n * 0.65) : n;
+      const inner = n - outer;
+      const rx = clamp(CANVAS_WIDTH * 0.28, 130, 340);
+      const ry = clamp(rx * 0.52, 70, 190);
+      const cy = topY + ry + 16;
+      for (let i = 0; i < outer; i++) {
+        const a = (i / outer) * TWO_PI - Math.PI / 2;
+        positions.push({ x: centerX + Math.cos(a) * rx, y: cy + Math.sin(a) * ry });
+      }
+      for (let i = 0; i < inner; i++) {
+        const a = (i / Math.max(1, inner)) * TWO_PI - Math.PI / 2 + 0.4;
+        positions.push({ x: centerX + Math.cos(a) * rx * 0.48, y: cy + Math.sin(a) * ry * 0.48 });
+      }
+      break;
+    }
+
+    case FORMATIONS.DOUBLE_ROW: {
+      const per = Math.min(maxCols, Math.ceil(n / 2));
+      pushFormationRow(positions, Math.min(per, n), topY, spacing, centerX, n);
+      let row = 1;
+      while (positions.length < n) {
+        const take = Math.min(per, n - positions.length);
+        pushFormationRow(positions, take, topY + row * spacing * 0.92, spacing, centerX, n);
+        row++;
+      }
+      break;
+    }
+
+    case FORMATIONS.GRID:
+    default: {
+      const cols = Math.max(1, Math.min(8, maxCols, n));
+      let row = 0;
+      while (positions.length < n) {
+        const take = Math.min(cols, n - positions.length);
+        pushFormationRow(positions, take, topY + row * spacing * 0.88, spacing, centerX, n);
+        row++;
+      }
+      break;
+    }
+  }
+
+  // FILET DE SÉCURITÉ : jamais moins (ni plus) de `n` positions.
+  let guard = 0;
+  while (positions.length < n && guard++ < 64) {
+    positions.push({ x: centerX, y: topY + (positions.length % 6) * spacing * 0.88 });
+  }
+  positions.length = n;
+
+  // Tout doit rester à l'écran, avec de la marge pour la marche latérale.
+  const half = enemySizeFor('elite') / 2;
+  const lo = margin + half;
+  const hi = CANVAS_WIDTH - margin - half;
+  for (let i = 0; i < positions.length; i++) {
+    positions[i].x = clamp(positions[i].x, lo, Math.max(lo, hi));
+    positions[i].y = clamp(positions[i].y, 40, CANVAS_HEIGHT * 0.45);
+  }
+
+  return positions;
+}
+
+/** Chemins d'entrée (courbes de Bézier) selon la chorégraphie.
+ *  Une entrée par position, toujours. Coordonnées en CENTRES. */
+function calculateEntryPaths(choreographyType, targetPositions) {
+  const paths = [];
+  const list = targetPositions || [];
+  const total = Math.max(1, list.length);
+  const offY = -120;
+  const W = CANVAS_WIDTH;
+
+  for (let i = 0; i < list.length; i++) {
+    const target = list[i];
+    let start, c1, c2;
+
+    switch (choreographyType) {
+
+      case ENTRY_CHOREOGRAPHIES.SPIRAL: {
+        const a = (i / total) * TWO_PI;
+        start = { x: W / 2, y: offY };
+        c1 = { x: W / 2 + Math.cos(a) * W * 0.34, y: 120 + Math.sin(a) * 130 };
+        c2 = { x: W / 2 + Math.cos(a + Math.PI) * W * 0.30, y: 240 + Math.sin(a + Math.PI) * 110 };
+        break;
+      }
+
+      case ENTRY_CHOREOGRAPHIES.ZIGZAG: {
+        const side = (i % 2 === 0) ? -1 : 1;
+        start = { x: side < 0 ? -70 : W + 70, y: offY + (i % 5) * 26 };
+        c1 = { x: W / 2 - side * W * 0.32, y: 130 };
+        c2 = { x: W / 2 + side * W * 0.28, y: 250 };
+        break;
+      }
+
+      case ENTRY_CHOREOGRAPHIES.CURVE_LEFT: {
+        start = { x: -80, y: 90 + ((i * 26) % 220) };
+        c1 = { x: W * 0.26, y: 40 + ((i * 34) % 170) };
+        c2 = { x: W * 0.58, y: 130 };
+        break;
+      }
+
+      case ENTRY_CHOREOGRAPHIES.CURVE_RIGHT: {
+        start = { x: W + 80, y: 90 + ((i * 26) % 220) };
+        c1 = { x: W * 0.74, y: 40 + ((i * 34) % 170) };
+        c2 = { x: W * 0.42, y: 130 };
+        break;
+      }
+
+      case ENTRY_CHOREOGRAPHIES.SPLIT: {
+        const side = i < total / 2 ? -1 : 1;
+        start = { x: W / 2 + side * 30, y: offY };
+        c1 = { x: W / 2 + side * W * 0.40, y: 120 };
+        c2 = { x: target.x, y: 190 };
+        break;
+      }
+
+      default: {
+        start = { x: target.x, y: offY - (i % 6) * 34 };
+        c1 = { x: target.x, y: offY + 60 };
+        c2 = { x: target.x, y: (offY + target.y) / 2 };
+      }
+    }
+
+    paths.push({ start: start, controlPoints: [c1, c2], end: target });
+  }
+
+  return paths;
+}
+
+/** Longueur approchée d'un chemin d'entrée -> cadence de progression (par seconde). */
+function entryRateFor(path, start, target) {
+  let len = 0, px = start.x, py = start.y;
+  const cps = path && path.controlPoints;
+  if (cps) {
+    for (let i = 0; i < cps.length; i++) {
+      len += Math.hypot(cps[i].x - px, cps[i].y - py);
+      px = cps[i].x; py = cps[i].y;
+    }
+  }
+  len += Math.hypot(target.x - px, target.y - py);
+  if (!(len > 1)) len = 420;
+  // Entre 0,40 s et 1,5 s : la chorégraphie est SPECTACULAIRE, pas ATTENTISTE.
+  return clamp(TEMPO.ENTRY_SPEED / len, 1 / 1.5, 1 / 0.40);
+}
+
+/** Crée une formation complète. Signature conservée (appelée par game.js).
+ *
+ *  `append` (RENFORT) : les nouveaux ennemis REJOIGNENT le champ de bataille au
+ *  lieu de le remplacer. C'est ce qui supprime le temps mort — jusqu'ici la
+ *  vague suivante n'arrivait qu'une fois l'écran VIDE, et le joueur passait la
+ *  moitié de la partie à courir après un dernier traînard.
+ *
+ *  En mode renfort, trois choses ne doivent SURTOUT PAS être touchées :
+ *   - `enemies` n'est pas vidé ;
+ *   - `enemyDirection` reste tel quel (sinon la formation en place fait un
+ *     demi-tour brutal à chaque arrivée) ;
+ *   - `waveGraceMs` n'est PAS relevé : cette accalmie gèle les tirs ET les
+ *     plongées de TOUT le champ. La relever à chaque renfort rendrait le jeu
+ *     mou en permanence.
+ *  Les ancres du renfort sont décalées de la dérive courante de la formation
+ *  pour que les deux groupes n'en fassent qu'un.
+ */
+function createFormation(count, formationType, choreographyType, stage, append) {
+  stage = stage || 1;
+
+  let driftX = 0, driftY = 0, indexBase = 0;
+
+  if (append) {
+    // Dérive courante de la formation en place (marche latérale + descentes).
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, live = 0;
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (!e || e.isDeleted || typeof e.formationX !== 'number') continue;
+      live++;
+      if (e.formationX < minX) minX = e.formationX;
+      if (e.formationX + e.width > maxX) maxX = e.formationX + e.width;
+      if (e.formationY < minY) minY = e.formationY;
+    }
+    if (live > 0) {
+      driftX = ((minX + maxX) / 2) - CANVAS_WIDTH / 2;
+      driftY = minY - (formationTopY() - 22);   // 22 ≈ demi-hauteur d'ennemi
+    }
+    indexBase = enemies.length;
+  } else {
+    enemies = [];
+    enemyDirection = Math.random() < 0.5 ? -1 : 1;
+    enemyShotTimer = enemyShotInterval * 0.9;
+    waveGraceMs = 1100;
+  }
+
+  const size = clamp(Math.floor(count) || 1, 1, 34);
+  const roster = buildTypeRoster(size, stage);
+  const positions = calculateFormationPositions(formationType, size);
+  const paths = calculateEntryPaths(choreographyType, positions);
+
+  const fallback = { x: CANVAS_WIDTH / 2, y: formationTopY() };
+
+  for (let i = 0; i < size; i++) {
+    const target = positions[i] || fallback;
+    const path = paths[i] || { start: { x: target.x, y: -120 }, controlPoints: null, end: target };
+    const start = path.start || { x: target.x, y: -120 };
+
+    const e = createEnemy(0, 0, roster[i], stage, ENEMY_PATTERNS.FORMATION);
+
+    // Ancre de formation, en coordonnées COIN (comme e.x / e.y).
+    e.formationX = clamp(target.x + driftX, 12, CANVAS_WIDTH - 12) - e.width / 2;
+    e.formationY = target.y + driftY - e.height / 2;
+    e.startX = e.formationX;
+    e.startY = e.formationY;
+    e.targetX = e.formationX;
+    e.targetY = e.formationY;
+
+    e.x = start.x + driftX - e.width / 2;
+    e.y = start.y - e.height / 2;
+
+    e.formationIndex = indexBase + i;
+    e.entryPath = path;
+    e.entryProgress = 0;
+    e.entryRate = entryRateFor(path, start, target);
+    // Décalage d'entrée : échelonné pour la chorégraphie, mais PLAFONNÉ. Sans
+    // ce plafond, une vague de 22 attendrait 1,2 s avant que le dernier parte.
+    e.entryDelay = (size > 1)
+      ? (i / (size - 1)) * Math.min(size * TEMPO.ENTRY_STAGGER_MS, 620)
+      : 0;
+    e.hasEntered = false;
+    e.phase = i * 0.55 + Math.random() * 0.5;
+    e.shotCooldown = 500 + i * 40 + randRange(0, 500);
+
+    enemies.push(e);
+  }
+}
+
+/** Vague libre (hors formation). Conservée pour compatibilité ; elle délègue
+ *  désormais à createFormation pour ne plus dupliquer la logique. */
 function createEnemyWave(count) {
   try {
-    // Types d'ennemis selon le stage actuel
-    let normalRatio = 0.7;
-    let shooterRatio = 0.15;
-    let fastRatio = 0.15;
-    
-    // Ajuster les ratios en fonction du stage
-    if (stageSystem.currentStage >= 3) {
-      normalRatio = 0.5;
-      shooterRatio = 0.25;
-      fastRatio = 0.25;
-    }
-    if (stageSystem.currentStage >= 6) {
-      normalRatio = 0.3;
-      shooterRatio = 0.35;
-      fastRatio = 0.35;
-    }
-    
-    // S'assurer que le nombre est valide
-    count = Math.max(1, Math.min(count, 30));
-    
-    // Déterminer le nombre d'ennemis par type
-    const numNormal = Math.floor(count * normalRatio);
-    const numShooter = Math.floor(count * shooterRatio);
-    const numFast = count - numNormal - numShooter;
-    
-    // Répartition des types d'ennemis pour une vague équilibrée
-    const enemyTypes = [];
-    for (let i = 0; i < numNormal; i++) enemyTypes.push("normal");
-    for (let i = 0; i < numShooter; i++) enemyTypes.push("shooter");
-    for (let i = 0; i < numFast; i++) enemyTypes.push("fast");
-    
-    // Mélanger les types pour une distribution aléatoire
-    for (let i = enemyTypes.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [enemyTypes[i], enemyTypes[j]] = [enemyTypes[j], enemyTypes[i]];
-    }
-    
-    // Créer les ennemis "qui arrivent du haut de l'écran"
-    for (let i = 0; i < count; i++) {
-      // Position initiale en haut de l'écran, avec espacement
-      const x = 50 + Math.random() * (CANVAS_WIDTH - 150);
-      const y = -50 - (i * 40) - Math.random() * 30; // Ajout d'aléatoire dans le décalage vertical
-      
-      // Position cible en fonction de la formation - avec un peu d'aléatoire
-      const targetY = 60 + Math.floor(i / 5) * 60 + Math.random() * 30;
-      
-      // Choisir un des patterns avec probabilités variables - plus de variété
-      let pattern;
-      const patternRandom = Math.random();
-      if (patternRandom < 0.4) { // Réduit de 70% à 40%
-        pattern = ENEMY_PATTERNS.PATROL;
-      } else if (patternRandom < 0.7) { // Augmenté de 15% à 30%
-        pattern = ENEMY_PATTERNS.DIVE;
-      } else if (patternRandom < 0.9) { // Augmenté de 15% à 20%
-        pattern = ENEMY_PATTERNS.SWEEP;
-      } else {
-        // 10% de chance d'avoir un nouveau pattern: ZIGZAG
-        pattern = ENEMY_PATTERNS.ZIGZAG;
-      }
-      
-      // Créer l'ennemi en utilisant la fonction createEnemy
-      const enemy = createEnemy(x, y, enemyTypes[i], stageSystem.currentStage, pattern);
-      
-      // Personnaliser les attributs spécifiques pour l'entrée
-      enemy.hasEntered = false;
-      enemy.targetY = targetY;
-      
-      enemies.push(enemy);
-    }
+    const stage = (typeof stageSystem !== 'undefined' && stageSystem.currentStage) || 1;
+    const formations = [FORMATIONS.GRID, FORMATIONS.DOUBLE_ROW, FORMATIONS.DIAMOND, FORMATIONS.CIRCLE];
+    const choreos = [
+      ENTRY_CHOREOGRAPHIES.CURVE_LEFT, ENTRY_CHOREOGRAPHIES.CURVE_RIGHT,
+      ENTRY_CHOREOGRAPHIES.ZIGZAG, ENTRY_CHOREOGRAPHIES.SPLIT, ENTRY_CHOREOGRAPHIES.SPIRAL
+    ];
+    createFormation(clamp(count || 8, 1, 30), pick(formations), pick(choreos), stage);
   } catch (e) {
     console.error("Erreur dans createEnemyWave:", e);
   }
 }
 
-// Mise à jour du mouvement des ennemis en fonction de leur pattern
+/* =============================================================================
+ *  MISE À JOUR
+ * ========================================================================== */
+
+/* Point de Bézier cubique, SANS allocation (résultat dans _bz). */
+const _bz = { x: 0, y: 0 };
+function bezierXY(t, x0, y0, x1, y1, x2, y2, x3, y3) {
+  const u = 1 - t;
+  const u2 = u * u, u3 = u2 * u;
+  const t2 = t * t, t3 = t2 * t;
+  const a = u3, b = 3 * u2 * t, c = 3 * u * t2, d = t3;
+  _bz.x = a * x0 + b * x1 + c * x2 + d * x3;
+  _bz.y = a * y0 + b * y1 + c * y2 + d * y3;
+  if (!isFinite(_bz.x)) _bz.x = x0 + (x3 - x0) * t;
+  if (!isFinite(_bz.y)) _bz.y = y0 + (y3 - y0) * t;
+  return _bz;
+}
+
+/* -----------------------------------------------------------------------------
+ *  1. MARCHE DE LA FORMATION — LE BUG BLOQUANT N°1
+ *  Le va-et-vient est porté par l'ANCRE (formationX/formationY). Les oscillations
+ *  sinusoïdales sont ensuite ajoutées PAR-DESSUS dans applyFormationOffsets(),
+ *  au lieu d'écraser la position comme le faisait l'ancien code.
+ * -------------------------------------------------------------------------- */
+function updateFormationMarch(dt) {
+  let minX = Infinity, maxX = -Infinity, lowest = -Infinity, n = 0;
+
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (!e || e.isDeleted || !e.hasEntered) continue;
+    if (e.diveState === 'dive' || e.diveState === 'return') continue;
+    n++;
+    if (e.formationX < minX) minX = e.formationX;
+    if (e.formationX + e.width > maxX) maxX = e.formationX + e.width;
+    if (e.formationY + e.height > lowest) lowest = e.formationY + e.height;
+  }
+
+  let step = 0;
+  let drop = 0;
+
+  if (n > 0) {
+    const margin = 10;
+    const span = maxX - minX;
+    const room = CANVAS_WIDTH - margin * 2;
+
+    // Formation plus large que l'écran (fenêtre réduite brutalement) : on la
+    // recentre au lieu de laisser les deux corrections de bord se battre.
+    if (span > room) {
+      const shift = (CANVAS_WIDTH / 2 - (minX + span / 2));
+      if (Math.abs(shift) > 0.5) {
+        for (let i = 0; i < enemies.length; i++) {
+          const e = enemies[i];
+          if (e && !e.isDeleted) e.formationX += shift * Math.min(1, dt * 6);
+        }
+      }
+      return;
+    }
+
+    step = getFormationSpeed() * enemyDirection * dt;
+
+    // Rebond sur les bords : demi-tour + descente d'un cran (Galaga).
+    if (enemyDirection > 0 && maxX + step > CANVAS_WIDTH - margin) {
+      enemyDirection = -1; step = 0; drop = enemyDrop;
+    } else if (enemyDirection < 0 && minX + step < margin) {
+      enemyDirection = 1; step = 0; drop = enemyDrop;
+    }
+
+    // Rattrapage si la formation déborde déjà (redimensionnement de fenêtre…)
+    if (maxX + step > CANVAS_WIDTH - margin) step = (CANVAS_WIDTH - margin) - maxX;
+    if (minX + step < margin) step = margin - minX;
+
+    // On ne descend jamais au-delà de la limite de sécurité.
+    if (drop > 0 && lowest + drop > CANVAS_HEIGHT * TEMPO.FORMATION_MAX_DESCENT) drop = 0;
+  }
+
+  if (step === 0 && drop === 0) return;
+
+  // L'ancre de TOUS les ennemis avance, y compris ceux qui entrent encore et
+  // ceux qui sont en plongée : ils rejoindront une formation qui a bougé.
+  for (let i = 0; i < enemies.length; i++) {
+    const e = enemies[i];
+    if (!e || e.isDeleted) continue;
+    e.formationX += step;
+    e.formationY += drop;
+  }
+}
+
+/* -----------------------------------------------------------------------------
+ *  2. RESPIRATION ET PATTERNS — de simples OFFSETS autour de l'ancre
+ * -------------------------------------------------------------------------- */
+function applyFormationOffsets(e) {
+  const t = FRAME.time;                     // temps de JEU (jamais Date.now())
+  const ph = e.phase + e.formationIndex * 0.28;
+
+  let ox = Math.sin(t * TWO_PI * TEMPO.FORMATION_SWAY_HZ + ph) * TEMPO.FORMATION_SWAY_AMP;
+  let oy = Math.sin(t * TWO_PI * TEMPO.FORMATION_BOB_HZ + ph * 0.7) * TEMPO.FORMATION_BOB_AMP;
+
+  if (e.pattern === ENEMY_PATTERNS.SWEEP) {
+    oy += Math.sin(t * 1.75 + ph) * e.height * 0.55;
+    ox += Math.cos(t * 1.15 + ph) * e.width * 0.45;
+  } else if (e.pattern === ENEMY_PATTERNS.ZIGZAG) {
+    const tri = Math.abs(((t * 1.15 + ph / TWO_PI) % 2) - 1) * 2 - 1;
+    ox += tri * e.width * 0.85;
+  }
+
+  // Anticipation de plongée : l'ennemi RECULE et vibre avant de fondre.
+  if (e.diveState === 'telegraph') {
+    const k = 1 - clamp(e.diveTele / Math.max(1, e.diveTeleMax), 0, 1);
+    oy -= smoothstep(k) * e.height * 0.45;
+    ox += Math.sin(k * 46) * e.width * 0.08;
+  }
+
+  e.x = e.formationX + ox;
+  e.y = e.formationY + oy;
+}
+
+/* -----------------------------------------------------------------------------
+ *  3. ENTRÉE EN SCÈNE (chorégraphie de Bézier, à vitesse constante)
+ * -------------------------------------------------------------------------- */
+function updateEnemyEntry(e, dtMs, dt) {
+  if (e.entryDelay > 0) { e.entryDelay -= dtMs; return; }
+
+  const ex = e.formationX + e.width / 2;      // l'ancre bouge : la cible aussi
+  const ey = e.formationY + e.height / 2;
+
+  e.entryProgress += e.entryRate * dt * clamp(e.speedModifier, 0.65, 1.8);
+
+  if (e.entryProgress >= 1) {
+    e.entryProgress = 1;
+    e.hasEntered = true;
+    e.x = e.formationX;
+    e.y = e.formationY;
+    return;
+  }
+
+  const path = e.entryPath;
+  if (!path || !path.start) {
+    // Chemin corrompu : on file droit sur l'ancre plutôt que de lever.
+    const step = TEMPO.ENTRY_SPEED * dt;
+    const dx = ex - (e.x + e.width / 2);
+    const dy = ey - (e.y + e.height / 2);
+    const d = Math.hypot(dx, dy) || 1;
+    if (d <= step) { e.x = e.formationX; e.y = e.formationY; e.hasEntered = true; return; }
+    e.x += dx / d * step;
+    e.y += dy / d * step;
+    return;
+  }
+
+  const p0 = path.start;
+  const cps = path.controlPoints;
+  const p1 = (cps && cps[0]) || { x: p0.x + (ex - p0.x) / 3, y: p0.y + (ey - p0.y) / 3 };
+  const p2 = (cps && cps[1]) || { x: p0.x + 2 * (ex - p0.x) / 3, y: p0.y + 2 * (ey - p0.y) / 3 };
+
+  bezierXY(e.entryProgress, p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, ex, ey);
+  e.x = _bz.x - e.width / 2;
+  e.y = _bz.y - e.height / 2;
+}
+
+/* -----------------------------------------------------------------------------
+ *  4. PLONGÉE — télégraphie, vol, retour
+ * -------------------------------------------------------------------------- */
+
+/** Tente de déclencher une plongée. Probabilité PAR SECONDE (jamais par frame). */
+function tryStartDive(e, dt, stage) {
+  if (waveGraceMs > 0) return false;
+  if (!e.hasEntered || e.diveState !== 'none') return false;
+  if (e.charge > 0 || e.burstLeft > 0) return false;
+  if (typeof gameState !== 'undefined' && gameState !== 'playing') return false;
+
+  let chance = getDiveChance(e.type, stage);
+  if (e.pattern === ENEMY_PATTERNS.DIVE) chance *= 1.8;
+  if (Math.random() >= chance * dt) return false;
+
+  // Cap visé mémorisé DÈS la télégraphie : la ligne d'anticipation affichée
+  // est donc exactement celle que l'ennemi va suivre. Le joueur peut LIRE.
+  let px = CANVAS_WIDTH / 2;
+  if (typeof player !== 'undefined' && player) {
+    px = player.x + player.width / 2 + (player.vx || 0) * 0.20;
+  }
+  e.diveAimX = clamp(px + randRange(-70, 70), 40, CANVAS_WIDTH - 40);
+  e.diveAimY = clamp(
+    (typeof player !== 'undefined' && player ? player.y : CANVAS_HEIGHT * 0.8) + 10,
+    CANVAS_HEIGHT * 0.45, CANVAS_HEIGHT - 30
+  );
+
+  e.diveState = 'telegraph';
+  e.diveTele = TEMPO.DIVE_TELEGRAPH_MS;
+  e.diveTeleMax = TEMPO.DIVE_TELEGRAPH_MS;
+
+  // Le son doit prévenir PENDANT la télégraphie (320 ms), pas au départ.
+  if (typeof gameEvent === 'function') gameEvent('diveAlert', { type: e.type });
+  return true;
+}
+
+/** Construit la courbe de plongée au sortir de la télégraphie. */
+function beginDivePath(e) {
+  const cx = e.x + e.width / 2;
+  const cy = e.y + e.height / 2;
+  const px = (typeof e.diveAimX === 'number') ? e.diveAimX : CANVAS_WIDTH / 2;
+  const py = (typeof e.diveAimY === 'number') ? e.diveAimY : CANVAS_HEIGHT * 0.78;
+  const side = (cx < px) ? 1 : -1;
+
+  e.dv0x = cx;                              e.dv0y = cy;
+  e.dv1x = cx + side * randRange(20, 120);  e.dv1y = cy + randRange(90, 200);
+  e.dv2x = px + randRange(-45, 45);         e.dv2y = py - randRange(10, 130);
+  e.dv3x = clamp(px + randRange(-170, 170), -60, CANVAS_WIDTH + 60);
+  e.dv3y = CANVAS_HEIGHT + 130;
+
+  const len = Math.hypot(e.dv1x - e.dv0x, e.dv1y - e.dv0y)
+            + Math.hypot(e.dv2x - e.dv1x, e.dv2y - e.dv1y)
+            + Math.hypot(e.dv3x - e.dv2x, e.dv3y - e.dv2y);
+
+  const sp = TEMPO.DIVE_SPEED * clamp(e.speedModifier, 0.7, 1.8);
+  e.diveDur = clamp(len / Math.max(60, sp) * 1000,
+                    TEMPO.DIVE_DURATION * 0.55, TEMPO.DIVE_DURATION * 1.9);
+  e.diveT = 0;
+  e.diveState = 'dive';
+  e.diving = true;
+  e.shotCooldown = Math.min(e.shotCooldown, 200);
+}
+
+function updateDiveFlight(e, dtMs) {
+  e.diveT += dtMs;
+  const t = clamp(e.diveT / Math.max(1, e.diveDur), 0, 1);
+  bezierXY(t, e.dv0x, e.dv0y, e.dv1x, e.dv1y, e.dv2x, e.dv2y, e.dv3x, e.dv3y);
+  e.x = _bz.x - e.width / 2;
+  e.y = _bz.y - e.height / 2;
+
+  if (t >= 1 || e.y > CANVAS_HEIGHT + 70) {
+    // Sortie par le bas, retour par le haut : c'est la boucle de Galaga.
+    e.diveState = 'return';
+    e.diving = true;
+    e.x = clamp(e.formationX + randRange(-40, 40), 10, Math.max(10, CANVAS_WIDTH - e.width - 10));
+    e.y = -e.height - randRange(20, 100);
+  }
+}
+
+function updateDiveReturn(e, dt) {
+  const tx = e.formationX;
+  const ty = e.formationY;
+  const dx = tx - e.x;
+  const dy = ty - e.y;
+  const d = Math.hypot(dx, dy);
+  const step = TEMPO.DIVE_RETURN_SPEED * clamp(e.speedModifier, 0.8, 1.7) * dt;
+
+  if (d <= step || d < 3) {
+    e.x = tx; e.y = ty;
+    e.diveState = 'none';
+    e.diving = false;
+    e.diveT = 0;
+    e.shotCooldown = Math.max(e.shotCooldown, 300);
+  } else {
+    e.x += dx / d * step;
+    e.y += dy / d * step;
+  }
+}
+
+/* -----------------------------------------------------------------------------
+ *  5. ARMEMENT — télégraphie de charge puis pattern selon le TYPE
+ * -------------------------------------------------------------------------- */
+
+/** Angle de tir vers le joueur, contraint vers le bas de l'écran. */
+function enemyAimAngle(e) {
+  const cx = e.x + e.width / 2;
+  const cy = e.y + e.height * 0.85;
+  let a = Math.PI / 2;                       // droit vers le bas par défaut
+
+  if (typeof player !== 'undefined' && player &&
+      typeof gameState !== 'undefined' && gameState === 'playing') {
+    a = Math.atan2((player.y + player.height * 0.45) - cy, (player.x + player.width / 2) - cx);
+  }
+  if (!isFinite(a)) a = Math.PI / 2;
+
+  // Jamais de tir vers le haut : si le joueur est au-dessus, on rase de côté.
+  if (a < 0) a = (Math.cos(a) >= 0) ? 0.22 : Math.PI - 0.22;
+  return clamp(a, 0.22, Math.PI - 0.22);
+}
+
+/** Un ennemi juste en dessous ? Alors on laisse la rangée avant tirer. */
+function hasAllyBelow(e) {
+  const cx = e.x + e.width / 2;
+  const reach = e.width * 0.6;
+  for (let i = 0; i < enemies.length; i++) {
+    const o = enemies[i];
+    if (!o || o === e || o.isDeleted || !o.hasEntered) continue;
+    if (o.y <= e.y + e.height * 0.5) continue;
+    if (Math.abs((o.x + o.width / 2) - cx) < reach) return true;
+  }
+  return false;
+}
+
+/** Ouvre la charge : c'est CE moment que le joueur doit voir venir. */
+function startEnemyCharge(e) {
+  e.charge = TEMPO.ENEMY_SHOT_TELEGRAPH_MS;
+  e.chargeMax = TEMPO.ENEMY_SHOT_TELEGRAPH_MS;
+  e.aimAngle = enemyAimAngle(e);
+}
+
+/** Envoie une balle. Passe par spawnEnemyBullet() de projectiles.js quand il
+ *  existe (vitesses en px/s, vx/vy intégrés là-bas), sinon pousse un objet brut
+ *  que normalizeBullet() saura reprendre. */
+function emitEnemyShot(e, angle) {
+  if (typeof enemyBullets === 'undefined' || !enemyBullets) return;
+  if (enemyBullets.length >= TEMPO.ENEMY_SHOT_MAX_ONSCREEN) return;
+
+  const st = enemyStats(e.type);
+  const sp = st.shotSpeed;
+  const cx = e.x + e.width / 2;
+  const cy = e.y + e.height * 0.80;
+  const vx = Math.cos(angle) * sp;
+  const vy = Math.sin(angle) * sp;
+
+  e.muzzle = 95;
+  e.muzzleAngle = angle;
+
+  // Pont bruitages : SFX.play('enemyShot') a son propre anti-répétition (40 ms),
+  // donc une gerbe de 5 ne produit qu'un seul son.
+  if (typeof gameEvent === 'function') gameEvent('enemyShot', { type: e.type });
+
+  if (typeof spawnEnemyBullet === 'function') {
+    spawnEnemyBullet(cx, cy, { vx: vx, vy: vy, speed: sp, kind: e.type });
+    return;
+  }
+
+  enemyBullets.push({
+    x: cx - TEMPO.ENEMY_BULLET_W / 2, y: cy,
+    width: TEMPO.ENEMY_BULLET_W, height: TEMPO.ENEMY_BULLET_H, drawH: TEMPO.ENEMY_BULLET_H,
+    vx: vx, vy: vy, speed: sp,
+    kind: e.type, type: e.type, owner: 'enemy', age: 0,
+    color: PALETTE.bullet('enemy', e.type).glow
+  });
+}
+
+/** Pattern de tir, dicté par le TYPE d'ennemi (fin du tir unique universel). */
+function fireEnemyPattern(e) {
+  const st = enemyStats(e.type);
+  const a = enemyAimAngle(e);
+  e.aimAngle = a;
+
+  switch (st.shot) {
+    case 'burst3':                  // canonnier : rafale visée de 3 coups
+      e.burstLeft = 3;
+      e.burstTimer = 0;
+      e.burstGap = 105;
+      return;                       // le cooldown est posé à la fin de la rafale
+
+    case 'spread3':                 // intercepteur : gerbe de 3
+      emitEnemyShot(e, a - 0.22);
+      emitEnemyShot(e, a);
+      emitEnemyShot(e, a + 0.22);
+      break;
+
+    case 'fan5':                    // élite : éventail de 5
+      for (let i = -2; i <= 2; i++) emitEnemyShot(e, a + i * 0.26);
+      break;
+
+    case 'single':
+    default:
+      emitEnemyShot(e, a);
+      break;
+  }
+
+  e.shotCooldown = st.cooldown * randRange(0.85, 1.25);
+}
+
+function updateEnemyWeapon(e, dtMs, dt, stage) {
+  if (e.shotCooldown > 0) e.shotCooldown -= dtMs;
+  if (e.muzzle > 0) e.muzzle -= dtMs;
+
+  // Rafale en cours
+  if (e.burstLeft > 0) {
+    e.burstTimer -= dtMs;
+    if (e.burstTimer <= 0) {
+      emitEnemyShot(e, enemyAimAngle(e));
+      e.burstLeft--;
+      e.burstTimer = e.burstGap;
+      if (e.burstLeft <= 0) e.shotCooldown = enemyStats(e.type).cooldown * randRange(0.9, 1.3);
+    }
+    return;
+  }
+
+  // Charge en cours (télégraphie)
+  if (e.charge > 0) {
+    e.charge -= dtMs;
+    if (e.charge <= 0) { e.charge = 0; fireEnemyPattern(e); }
+    return;
+  }
+
+  if (!e.hasEntered) return;
+  if (waveGraceMs > 300) return;             // accalmie d'arrivée de vague
+  if (e.shotCooldown > 0) return;
+  if (e.diveState === 'telegraph' || e.diveState === 'return') return;
+  if (typeof gameState !== 'undefined' && gameState !== 'playing') return;
+  if (typeof enemyBullets !== 'undefined' && enemyBullets.length >= TEMPO.ENEMY_SHOT_MAX_ONSCREEN) return;
+
+  const st = enemyStats(e.type);
+  let chance = getEnemyShotChancePerSec(e.type, stage) * st.shotRate;
+  if (e.diveState === 'dive') chance *= 1.45;        // les plongeurs harcèlent
+  else if (hasAllyBelow(e)) chance *= 0.10;          // priorité à la rangée avant
+
+  // Garde-fou : ENEMY_SHOT_STAGE_MULT est multiplicatif (1.08^9 = ×2 au stage 10).
+  // On plafonne pour que la fin de partie reste un rideau LISIBLE, pas un mur.
+  if (chance > 1.2) chance = 1.2;
+
+  if (Math.random() < chance * dt) startEnemyCharge(e);
+}
+
+/** Salve coordonnée : donne un RYTHME à la pression au lieu d'un crépitement. */
+function triggerEnemyVolley(stage) {
+  if (waveGraceMs > 0) return;
+  if (typeof gameState !== 'undefined' && gameState !== 'playing') return;
+  if (typeof enemyBullets !== 'undefined' &&
+      enemyBullets.length > TEMPO.ENEMY_SHOT_MAX_ONSCREEN * 0.55) return;
+
+  const n = enemies.length;
+  if (!n) return;
+
+  const wanted = clamp(1 + Math.floor(((stage || 1) - 1) / 3), 1, 3);
+  const off = Math.floor(Math.random() * n);
+  let fired = 0;
+
+  for (let k = 0; k < n && fired < wanted; k++) {
+    const e = enemies[(k + off) % n];
+    if (!e || e.isDeleted || !e.hasEntered) continue;
+    if (e.charge > 0 || e.burstLeft > 0 || e.shotCooldown > 0) continue;
+    if (e.diveState === 'telegraph' || e.diveState === 'return') continue;
+    if (hasAllyBelow(e)) continue;
+    startEnemyCharge(e);
+    fired++;
+  }
+}
+
+/* -----------------------------------------------------------------------------
+ *  6. ORIENTATION — les patterns DIVE/SWEEP/ZIGZAG deviennent enfin LISIBLES
+ * -------------------------------------------------------------------------- */
+function updateEnemyFacing(e, prevX, prevY, dt) {
+  const vx = (e.x - prevX) / dt;
+  const vy = (e.y - prevY) / dt;
+  e.vx = vx;
+  e.vy = vy;
+
+  let target;
+  if (!e.hasEntered || e.diveState === 'dive' || e.diveState === 'return') {
+    // Nez dans le sens de la marche (silhouettes dessinées nez vers le BAS).
+    const sp = Math.hypot(vx, vy);
+    target = (sp > 45) ? Math.atan2(-vx, vy) : e.faceAngle;
+  } else {
+    target = enemyDirection * 0.13;          // simple inclinaison dans la marche
+  }
+
+  let d = target - e.faceAngle;
+  while (d > Math.PI) d -= TWO_PI;
+  while (d < -Math.PI) d += TWO_PI;
+  e.faceAngle += d * (1 - Math.pow(0.0009, dt));   // lissage indépendant du fps
+
+  if (e.faceAngle > Math.PI) e.faceAngle -= TWO_PI;
+  else if (e.faceAngle < -Math.PI) e.faceAngle += TWO_PI;
+}
+
+/* -----------------------------------------------------------------------------
+ *  7. AIGUILLAGE PAR ENNEMI (signature conservée)
+ * -------------------------------------------------------------------------- */
 function updateEnemyMovement(enemy, deltaTime) {
   try {
-    // Vérifications de sécurité pour éviter les erreurs
-    if (!enemy || typeof enemy !== 'object') {
-      return;
-    }
-    
-    // Cas spécial pour les ennemis en formation
-    if (enemy.pattern === ENEMY_PATTERNS.FORMATION) {
-      // Vérifier que l'ennemi n'est pas déjà supprimé
-      if (enemy.isDeleted) {
-        return;
-      }
-      
-      // Si le stage est terminé, ne pas continuer le mouvement
-      if (stageSystem.stageCompleted || stageSystem.transitionActive) {
-        return;
-      }
-      
-      // Protection contre les calculs intensifs pour les grands nombres d'ennemis
-      // Réduire la fréquence de mise à jour pour les ennemis éloignés du joueur
-      if (enemies.length > 10) {
-        // Si l'ennemi est loin du joueur et du bas de l'écran, n'actualiser que partiellement
-        const farFromPlayer = !player || (
-          Math.abs(enemy.x - player.x) > 300 && 
-          enemy.y < CANVAS_HEIGHT - 200
-        );
-        
-        // Réduire la fréquence de mise à jour pour les ennemis lointains
-        if (farFromPlayer && Math.random() > 0.3) {
-          return; // Sauter certaines mises à jour pour économiser les ressources
-        }
-      }
-      
-      // Vérifier si l'ennemi a commencé sa chorégraphie d'entrée
-      if (enemy.startFormationTime && Date.now() < enemy.startFormationTime) {
-        return; // Attendre avant de commencer le mouvement
-      }
-      
-      // Si l'ennemi n'est pas encore arrivé en formation
-      if (!enemy.hasEntered) {
-        try {
-          // Augmenter progressivement la progression de la trajectoire
-          const speed = 0.006; // Vitesse d'entrée augmentée (était 0.003)
-          enemy.entryProgress = enemy.entryProgress || 0;
-          enemy.entryProgress += speed * (deltaTime / 16);
-          
-          // Si la progression est terminée
-          if (enemy.entryProgress >= 1) {
-            enemy.hasEntered = true;
-            enemy.x = enemy.targetX;
-            enemy.y = enemy.targetY;
-            enemy.startX = enemy.x;
-            enemy.startY = enemy.y;
-          } else {
-            // Calculer la position sur la courbe de Bézier
-            const path = enemy.entryPath;
-            if (!path || !path.start || !path.end) {
-              // Si le chemin est corrompu, avancer directement
-              enemy.y += 2;
-              if (enemy.y >= enemy.targetY) {
-                enemy.hasEntered = true;
-                enemy.x = enemy.targetX || enemy.x;
-                enemy.y = enemy.targetY || enemy.y;
-                enemy.startX = enemy.x;
-                enemy.startY = enemy.y;
-              }
-              return;
-            }
-            
-            // Utiliser une courbe de Bézier cubique pour un mouvement fluide
-            const t = enemy.entryProgress;
-            const p0 = path.start;
-            const p3 = path.end;
-            
-            // Utiliser les points de contrôle ou créer des points par défaut
-            const p1 = (path.controlPoints && path.controlPoints[0]) || { 
-              x: p0.x + (p3.x - p0.x) / 3, 
-              y: p0.y + (p3.y - p0.y) / 3 
-            };
-            const p2 = (path.controlPoints && path.controlPoints[1]) || { 
-              x: p0.x + 2 * (p3.x - p0.x) / 3, 
-              y: p0.y + 2 * (p3.y - p0.y) / 3 
-            };
-            
-            // Calculer le point sur la courbe de Bézier, avec une protection contre NaN
-            try {
-              const point = calculateBezierPoint(t, p0, p1, p2, p3);
-              if (isNaN(point.x) || isNaN(point.y)) {
-                // Si le calcul donne NaN, utiliser une approche linéaire simple
-                enemy.x = p0.x + (p3.x - p0.x) * t;
-                enemy.y = p0.y + (p3.y - p0.y) * t;
-              } else {
-                enemy.x = point.x;
-                enemy.y = point.y;
-              }
-            } catch (e) {
-              // En cas d'erreur dans le calcul, utiliser une approche linéaire simple
-              enemy.x = p0.x + (p3.x - p0.x) * t;
-              enemy.y = p0.y + (p3.y - p0.y) * t;
-            }
-          }
-        } catch (e) {
-          console.error("Erreur dans le calcul de trajectoire d'un ennemi:", e);
-          // En cas d'erreur, faire avancer l'ennemi directement
-          enemy.y += 2;
-          if (enemy.y >= (enemy.targetY || 100)) {
-            enemy.hasEntered = true;
-          }
-        }
-        return;
-      }
-      
-      // Une fois en formation, ajouter un léger mouvement de flottement
-      const time = Date.now() / 1000;
-      const phaseOffset = enemy.formationIndex * 0.2; // Décalage de phase pour éviter le mouvement synchronisé
-      
-      // Léger mouvement sinusoïdal horizontal
-      const horizontalAmplitude = 5;
-      const horizontalFrequency = 0.5;
-      enemy.x = enemy.startX + Math.sin(time * horizontalFrequency + phaseOffset) * horizontalAmplitude;
-      
-      // Léger mouvement sinusoïdal vertical
-      const verticalAmplitude = 3;
-      const verticalFrequency = 0.3;
-      enemy.y = enemy.startY + Math.sin(time * verticalFrequency + phaseOffset) * verticalAmplitude;
-      
-      // Parfois, un ennemi peut plonger pour attaquer (comme dans Galaga)
-      if (enemy.hasEntered && !enemy.diving && Math.random() < 0.0001) { // Réduit de 0.0003 à 0.0001
-        enemy.diving = true;
-        enemy.diveStartX = enemy.x;
-        enemy.diveStartY = enemy.y;
-        enemy.diveProgress = 0;
-        
-        // Cibler une position près du joueur
-        if (player) {
-          enemy.targetX = Math.max(50, Math.min(CANVAS_WIDTH - 50, player.x + (Math.random() * 200 - 100)));
-          enemy.targetY = Math.min(CANVAS_HEIGHT * 0.8, CANVAS_HEIGHT * 0.5 + Math.random() * 0.3 * CANVAS_HEIGHT);
-        } else {
-          enemy.targetX = CANVAS_WIDTH / 2;
-          enemy.targetY = CANVAS_HEIGHT * 0.7;
-        }
-      }
-      
-      // Gestion de la plongée en formation
-      if (enemy.diving) {
-        const diveSpeed = 0.0012; // Vitesse de plongée réduite (était 0.002)
-        enemy.diveProgress += deltaTime * diveSpeed;
-        
-        if (enemy.diveProgress < 1) {
-          // Descente avec courbe
-          const t = enemy.diveProgress;
-          
-          // Courbe de Bézier pour la descente
-          const p0 = { x: enemy.diveStartX, y: enemy.diveStartY };
-          const p3 = { x: enemy.targetX, y: enemy.targetY };
-          const p1 = { x: p0.x, y: p0.y + 50 };
-          const p2 = { x: p3.x, y: p3.y - 50 };
-          
-          const point = calculateBezierPoint(t, p0, p1, p2, p3);
-          enemy.x = point.x;
-          enemy.y = point.y;
-        } 
-        else if (enemy.diveProgress < 2) {
-          // Remontée vers la formation
-          const t = enemy.diveProgress - 1;
-          
-          // Courbe de Bézier pour la remontée
-          const p0 = { x: enemy.targetX, y: enemy.targetY };
-          const p3 = { x: enemy.startX, y: enemy.startY };
-          const p1 = { x: p0.x, y: p0.y - 50 };
-          const p2 = { x: p3.x, y: p3.y + 50 };
-          
-          const point = calculateBezierPoint(t, p0, p1, p2, p3);
-          enemy.x = point.x;
-          enemy.y = point.y;
-        }
-        else {
-          // Fin de la plongée
-          enemy.diving = false;
-          enemy.x = enemy.startX;
-          enemy.y = enemy.startY;
-        }
-      }
-      
-      return;
-    }
-    
-    // Si l'ennemi n'a pas encore atteint sa position initiale (entrée progressive)
-    if (!enemy.hasEntered) {
-      // Mouvement direct vers la cible avec vitesse variable
-      const entrySpeed = 2 + Math.random() * 2; // Vitesse d'entrée entre 2 et 4
-      enemy.y += entrySpeed;
-      
-      // Ajout d'un léger mouvement horizontal pour une entrée moins rigide
-      if (enemy.sinusoidalMovement) {
-        enemy.x += Math.sin(Date.now() / 500 + enemy.movementPhase) * 1.5;
-      }
-      
-      // Si l'ennemi a atteint sa position cible
-      if (enemy.y >= enemy.targetY) {
-        enemy.y = enemy.targetY;
-        enemy.hasEntered = true;
-        enemy.startX = enemy.x;
-        enemy.startY = enemy.y;
-      }
-      return;
-    }
+    if (!enemy || typeof enemy !== 'object' || enemy.isDeleted) return;
+    if (!enemy._rt) ensureEnemyRuntime(enemy);
 
-    // S'assurer que startX et startY sont définis pour éviter les NaN
-    if (enemy.startX === undefined) enemy.startX = enemy.x;
-    if (enemy.startY === undefined) enemy.startY = enemy.y;
+    const dtMs = (deltaTime > 0) ? deltaTime : 0;
+    const dt = dtMs / 1000;
+    if (dt <= 0) return;                     // hitstop / pause : on ne fait rien
 
-    // Pattern de patrouille - avec mouvement vertical léger
-    if (enemy.pattern === ENEMY_PATTERNS.PATROL) {
-      if (enemy.sinusoidalMovement) {
-        // Ajouter un mouvement vertical ondulant subtil
-        const time = Date.now() / 1000;
-        const offset = Math.sin(time * enemy.oscillationFrequency + enemy.movementPhase) * (enemy.oscillationAmplitude * 0.3);
-        enemy.y = enemy.startY + offset;
-      }
-      return;
+    if (!enemy.hasEntered) { updateEnemyEntry(enemy, dtMs, dt); return; }
+
+    if (enemy.diveState === 'telegraph') {
+      enemy.diveTele -= dtMs;
+      if (enemy.diveTele <= 0) { beginDivePath(enemy); }
     }
-    
-    // Pattern de plongée - amélioré
-    if (enemy.pattern === ENEMY_PATTERNS.DIVE && !enemy.diving) {
-      // Probabilité de plongée ajustée pour être plus fréquente mais pas trop
-      if (Math.random() < 0.001) {
-        enemy.diving = true;
-        enemy.diveStartX = enemy.x;
-        enemy.diveStartY = enemy.y;
-        enemy.diveProgress = 0;
-        
-        // Cibler une position plus dynamique - parfois le joueur, parfois aléatoire
-        if (Math.random() < 0.7 && player) {
-          // Viser près du joueur
-          enemy.targetX = Math.max(50, Math.min(CANVAS_WIDTH - 50, player.x + (Math.random() * 200 - 100)));
-        } else {
-          // Position aléatoire
-          enemy.targetX = Math.random() * (CANVAS_WIDTH - 100) + 50;
-        }
-        enemy.targetY = Math.min(CANVAS_HEIGHT * 0.7, CANVAS_HEIGHT * 0.4 + Math.random() * 0.3 * CANVAS_HEIGHT);
-      }
-    }
-    // Gestion de la plongée améliorée
-    else if (enemy.pattern === ENEMY_PATTERNS.DIVE && enemy.diving) {
-      // Vitesse de plongée variable
-      const diveSpeed = 0.001 + Math.random() * 0.0005;
-      enemy.diveProgress += deltaTime * diveSpeed;
-      
-      if (enemy.diveProgress < 1) {
-        // Descente avec courbe
-        const t = enemy.diveProgress;
-        enemy.x = enemy.diveStartX + (enemy.targetX - enemy.diveStartX) * t;
-        // Utilisation d'une courbe de Bézier pour un mouvement plus fluide
-        const bezierY = enemy.diveStartY * Math.pow(1-t, 2) + 
-                     (enemy.diveStartY + 100) * 2 * (1-t) * t + 
-                     enemy.targetY * Math.pow(t, 2);
-        enemy.y = bezierY;
-      } 
-      else if (enemy.diveProgress < 2) {
-        // Remontée avec courbe
-        const t = enemy.diveProgress - 1;
-        enemy.x = enemy.targetX + (enemy.diveStartX - enemy.targetX) * t;
-        // Courbe de Bézier pour la remontée
-        const bezierY = enemy.targetY * Math.pow(1-t, 2) + 
-                     (enemy.targetY - 100) * 2 * (1-t) * t + 
-                     enemy.diveStartY * Math.pow(t, 2);
-        enemy.y = bezierY;
-      }
-      else {
-        // Fin de la plongée
-        enemy.diving = false;
-        enemy.x = enemy.diveStartX;
-        enemy.y = enemy.diveStartY;
-      }
-    }
-    
-    // Pattern de balayage - amélioré
-    if (enemy.pattern === ENEMY_PATTERNS.SWEEP && !enemy.diving) {
-      // Oscillation verticale avec paramètres personnalisés
-      const time = Date.now() / 1000;
-      const offset = Math.sin(time * enemy.oscillationFrequency + enemy.movementPhase) * enemy.oscillationAmplitude;
-      enemy.y = enemy.startY + offset;
-      
-      // Ajout d'un léger mouvement horizontal indépendant
-      if (enemy.sinusoidalMovement) {
-        const horizontalOffset = Math.cos(time * enemy.oscillationFrequency * 0.7 + enemy.movementPhase) * (enemy.oscillationAmplitude * 0.6);
-        enemy.x = enemy.startX + horizontalOffset;
-      }
-    }
-    
-    // Nouveau pattern: ZigZag
-    if (enemy.pattern === ENEMY_PATTERNS.ZIGZAG && !enemy.diving) {
-      const time = Date.now() / 1000;
-      // Mouvement en dents de scie pour l'axe horizontal
-      const triangleWave = Math.abs(((time * enemy.oscillationFrequency * 2 + enemy.movementPhase) % 2) - 1) * 2 - 1;
-      const zigzagOffset = triangleWave * enemy.oscillationAmplitude * 1.5;
-      enemy.x = enemy.startX + zigzagOffset;
-      
-      // Léger mouvement vertical sinusoïdal
-      if (enemy.sinusoidalMovement) {
-        const verticalOffset = Math.sin(time * enemy.oscillationFrequency * 0.5 + enemy.movementPhase) * (enemy.oscillationAmplitude * 0.4);
-        enemy.y = enemy.startY + verticalOffset;
-      }
-    }
-  } catch (e) {
-    console.error("Erreur dans updateEnemyMovement:", e);
-    
-    // En cas d'erreur, réinitialiser l'état de l'ennemi pour éviter les freeze
+    if (enemy.diveState === 'dive')   { updateDiveFlight(enemy, dtMs); return; }
+    if (enemy.diveState === 'return') { updateDiveReturn(enemy, dt);   return; }
+
+    applyFormationOffsets(enemy);
+  } catch (err) {
+    console.error("Erreur dans updateEnemyMovement:", err);
     if (enemy) {
+      enemy.diveState = 'none';
       enemy.diving = false;
-      if (enemy.startY) {
-        enemy.y = enemy.startY;
-      }
-      if (enemy.startX) {
-        enemy.x = enemy.startX;
-      }
+      if (isFinite(enemy.formationX)) enemy.x = enemy.formationX;
+      if (isFinite(enemy.formationY)) enemy.y = enemy.formationY;
     }
   }
 }
 
-// Mise à jour des ennemis
+/* -----------------------------------------------------------------------------
+ *  8. BOUCLE PRINCIPALE DES ENNEMIS
+ * -------------------------------------------------------------------------- */
 function updateEnemies(deltaTime) {
   try {
-    // La limite maximale de descente (50% de la hauteur de l'écran)
-    const maxDescentY = CANVAS_HEIGHT * 0.5;
-    
-    // Vérifications de sécurité
-    if (!enemies || !Array.isArray(enemies) || enemies.length === 0) {
-      return;
-    }
-    
-    // Simplification - pas de détection de collision temporairement
-    // Nous réactiverons cette fonctionnalité quand le jeu fonctionnera sans freeze
-    // detectEnemyCollisions();
-    
-    // Déplacement horizontal plus simple
-    let hitEdge = false;
-    
-    // Vérifier si un ennemi touche un bord
+    if (!enemies || !Array.isArray(enemies) || enemies.length === 0) return;
+
+    const dtMs = (deltaTime > 0) ? deltaTime : 0;
+    const dt = dtMs / 1000;
+    if (dt <= 0) return;                     // hitstop / pause
+
+    if (typeof stageSystem !== 'undefined' && stageSystem &&
+        (stageSystem.stageCompleted || stageSystem.transitionActive)) return;
+
+    const stage = (typeof stageSystem !== 'undefined' && stageSystem.currentStage) || 1;
+
+    // Ennemis créés ailleurs (repli de game.js, createSimpleEnemies…)
     for (let i = 0; i < enemies.length; i++) {
-      const enemy = enemies[i];
-      if (enemy && enemy.hasEntered && !enemy.diving) {
-        if ((enemyDirection === 1 && enemy.x + enemy.width >= CANVAS_WIDTH - 10) ||
-            (enemyDirection === -1 && enemy.x <= 10)) {
-          hitEdge = true;
-          break;
-        }
-      }
+      const e = enemies[i];
+      if (e && !e._rt) ensureEnemyRuntime(e);
     }
-    
-    // Si un ennemi a touché un bord, changer de direction et descendre
-    if (hitEdge) {
-      enemyDirection *= -1;
-      
-      for (let i = 0; i < enemies.length; i++) {
-        const enemy = enemies[i];
-        if (enemy && enemy.hasEntered && !enemy.diving) {
-          // Descendre, mais limiter à la moitié de l'écran
-          const descentAmount = enemyDrop;
-          if (enemy.y + descentAmount < maxDescentY) {
-            enemy.y += descentAmount;
-            // Mettre à jour la position de départ pour les patterns
-            enemy.startY = enemy.y;
-          }
-        }
-      }
+
+    if (waveGraceMs > 0) waveGraceMs -= dtMs;
+
+    updateFormationMarch(dt);
+
+    // Salve coordonnée
+    enemyShotTimer -= dtMs;
+    if (enemyShotTimer <= 0) {
+      enemyShotTimer = enemyShotInterval * randRange(0.72, 1.35);
+      triggerEnemyVolley(stage);
     }
-    
-    // Appliquer le mouvement horizontal - simplifié
+
+    // Plongeurs simultanés : montée en puissance par stage, plafonnée par TEMPO.
+    // Au stage 1 il y a TOUJOURS un plongeur en approche, mais un seul : le
+    // joueur apprend à lire l'attaque avant d'en affronter quatre.
+    const maxDivers = clamp(1 + Math.floor(stage / 2), 1, TEMPO.DIVE_MAX_CONCURRENT);
+
+    let divers = 0;
     for (let i = 0; i < enemies.length; i++) {
-      const enemy = enemies[i];
-      if (enemy && enemy.hasEntered && !enemy.diving) {
-        // Mouvement direct sans accélération pour simplifier
-        enemy.x += enemySpeed * enemyDirection * (enemy.speedModifier || 1);
-        
-        // S'assurer que l'ennemi reste dans les limites de l'écran
-        enemy.x = Math.max(10, Math.min(enemy.x, CANVAS_WIDTH - enemy.width - 10));
-      }
+      const e = enemies[i];
+      if (e && !e.isDeleted && e.diveState !== 'none') divers++;
     }
-    
-    // Mise à jour du comportement spécifique de chaque ennemi
+
     for (let i = 0; i < enemies.length; i++) {
-      const enemy = enemies[i];
-      if (enemy) {
-        updateEnemyMovement(enemy, deltaTime);
-        
-        // Tir des ennemis - uniquement s'ils ont complètement entré dans l'écran
-        // Réduire considérablement la probabilité de tir
-        const reducedShotChance = (enemy.shotChance || 0.001) * 0.3; // Réduction de 70%
-        if (enemy.hasEntered && !enemy.diving && Math.random() < reducedShotChance) {
-          enemyBullets.push({
-            x: enemy.x + enemy.width / 2 - 2,
-            y: enemy.y + enemy.height,
-            width: 4,
-            height: 10,
-            speed: 3, // Vitesse des tirs réduite (était 5)
-            color: enemy.type === 'shooter' ? 'magenta' : 'yellow'
-          });
-        }
+      const e = enemies[i];
+      if (!e || e.isDeleted) continue;
+
+      const prevX = e.x, prevY = e.y;
+
+      if (e.hitFlash > 0) { e.hitFlash -= dtMs; if (e.hitFlash < 0) e.hitFlash = 0; }
+
+      updateEnemyMovement(e, dtMs);
+
+      if (e.hasEntered && e.diveState === 'none' && divers < maxDivers) {
+        if (tryStartDive(e, dt, stage)) divers++;
       }
+
+      updateEnemyWeapon(e, dtMs, dt, stage);
+      updateEnemyFacing(e, prevX, prevY, dt);
+
+      // Miroirs de compatibilité pour les modules qui lisent encore ces champs.
+      e.diving = (e.diveState === 'dive' || e.diveState === 'return');
+      e.startX = e.formationX;
+      e.startY = e.formationY;
     }
-  } catch (e) {
-    console.error("Erreur dans updateEnemies:", e);
+  } catch (err) {
+    console.error("Erreur dans updateEnemies:", err);
   }
 }
 
-// Détection et résolution des collisions entre ennemis
+/** Séparation douce entre ennemis. Les slots de formation ne se chevauchent plus
+ *  par construction : cette fonction n'est plus appelée par la boucle, elle est
+ *  conservée (et corrigée) pour les modules externes qui la connaissent. */
 function detectEnemyCollisions() {
   try {
-    // Limiter le nombre de vérifications de collision pour éviter la surcharge
-    const maxChecks = 100;
-    let checksPerformed = 0;
-    
-    // Pour chaque paire d'ennemis
-    for (let i = 0; i < enemies.length && checksPerformed < maxChecks; i++) {
-      for (let j = i + 1; j < enemies.length && checksPerformed < maxChecks; j++) {
-        checksPerformed++;
-        
-        const enemyA = enemies[i];
-        const enemyB = enemies[j];
-        
-        // Vérifier si les deux ennemis sont entrés et ne sont pas en plongée
-        if (enemyA && enemyB && enemyA.hasEntered && enemyB.hasEntered && 
-            !enemyA.diving && !enemyB.diving) {
-          
-          // Test de collision simplifié (AABB)
-          const collision = 
-            enemyA.x < enemyB.x + enemyB.width &&
-            enemyA.x + enemyA.width > enemyB.x &&
-            enemyA.y < enemyB.y + enemyB.height &&
-            enemyA.y + enemyA.height > enemyB.y;
-          
-          if (collision) {
-            // Définir une petite répulsion pour éviter le chevauchement
-            const repulsionForce = 1.0;
-            
-            // Répulsion horizontale simple
-            if (enemyA.x < enemyB.x) {
-              enemyA.x -= repulsionForce;
-              enemyB.x += repulsionForce;
-            } else {
-              enemyA.x += repulsionForce;
-              enemyB.x -= repulsionForce;
-            }
-            
-            // S'assurer que les ennemis restent dans les limites de l'écran
-            enemyA.x = Math.max(10, Math.min(enemyA.x, CANVAS_WIDTH - enemyA.width - 10));
-            enemyB.x = Math.max(10, Math.min(enemyB.x, CANVAS_WIDTH - enemyB.width - 10));
-            
-            // Mettre à jour les positions de référence
-            enemyA.startX = enemyA.x;
-            enemyB.startX = enemyB.x;
-          }
-        }
+    for (let i = 0; i < enemies.length; i++) {
+      const a = enemies[i];
+      if (!a || a.isDeleted || !a.hasEntered || a.diveState !== 'none') continue;
+      for (let j = i + 1; j < enemies.length; j++) {
+        const b = enemies[j];
+        if (!b || b.isDeleted || !b.hasEntered || b.diveState !== 'none') continue;
+        if (!rectIntersect(a, b)) continue;
+        // On écarte les ANCRES, pas les positions : sinon on se battrait avec
+        // les oscillations, qui réécrivent x/y à chaque frame.
+        const push = 1.2;
+        if (a.formationX <= b.formationX) { a.formationX -= push; b.formationX += push; }
+        else { a.formationX += push; b.formationX -= push; }
       }
     }
   } catch (e) {
@@ -610,497 +1227,431 @@ function detectEnemyCollisions() {
   }
 }
 
-// Affichage des ennemis - Version simplifiée
+/* =============================================================================
+ *  RENDU NÉON VECTORIEL
+ * -----------------------------------------------------------------------------
+ *  Les silhouettes sont décrites UNE FOIS en coordonnées UNITAIRES (le vaisseau
+ *  tient dans [-0.7, 0.7], NEZ VERS LE BAS, +y). Elles sont transformées à la
+ *  volée (échelle + rotation) dans des tampons réutilisés : aucune allocation,
+ *  aucun ctx.scale() — l'épaisseur des traits reste donc en px écran, ce qui est
+ *  indispensable pour que le noyau clair du néon garde sa finesse.
+ * ========================================================================== */
+
+/* Tampons réutilisés (jamais réalloués) */
+const _sbuf = [];
+const _unit = [];
+const _o = { alpha: 1, glowScale: 1, fill: false, fillAlpha: 0.28, dash: null, dashOffset: 0, passes: undefined };
+
+function opt(alpha, glowScale, fill, fillAlpha, passes) {
+  _o.alpha = alpha == null ? 1 : alpha;
+  _o.glowScale = glowScale == null ? 1 : glowScale;
+  _o.fill = !!fill;
+  _o.fillAlpha = fillAlpha == null ? 0.26 : fillAlpha;
+  _o.dash = null;
+  _o.dashOffset = 0;
+  _o.passes = passes;
+  return _o;
+}
+
+/** Transforme un tracé unitaire (échelle `s`, rotation cos/sin) et l'empile. */
+function toScreen(unit, cx, cy, s, cos, sin) {
+  const n = unit.length;
+  _sbuf.length = n;
+  for (let i = 0; i < n; i += 2) {
+    const px = unit[i] * s, py = unit[i + 1] * s;
+    _sbuf[i]     = cx + px * cos - py * sin;
+    _sbuf[i + 1] = cy + px * sin + py * cos;
+  }
+  return _sbuf;
+}
+
+function eShape(c, unit, cx, cy, s, cos, sin, col, w, o) {
+  NEON.shape(c, toScreen(unit, cx, cy, s, cos, sin), col, w, o);
+}
+
+function ePoly(c, unit, cx, cy, s, cos, sin, col, w, o) {
+  NEON.polyline(c, toScreen(unit, cx, cy, s, cos, sin), col, w, o);
+}
+
+function eLine(c, cx, cy, s, cos, sin, ax, ay, bx, by, col, w, o) {
+  const x1 = cx + (ax * s) * cos - (ay * s) * sin;
+  const y1 = cy + (ax * s) * sin + (ay * s) * cos;
+  const x2 = cx + (bx * s) * cos - (by * s) * sin;
+  const y2 = cy + (bx * s) * sin + (by * s) * cos;
+  NEON.line(c, x1, y1, x2, y2, col, w, o);
+}
+
+function eDot(c, cx, cy, s, cos, sin, ax, ay, r, col, o) {
+  const x = cx + (ax * s) * cos - (ay * s) * sin;
+  const y = cy + (ax * s) * sin + (ay * s) * cos;
+  NEON.dot(c, x, y, r, col, o);
+}
+
+function eRing(c, cx, cy, s, cos, sin, ax, ay, r, thick, col, o) {
+  const x = cx + (ax * s) * cos - (ay * s) * sin;
+  const y = cy + (ax * s) * sin + (ay * s) * cos;
+  NEON.ring(c, x, y, r, thick, col, o);
+}
+
+/* --------------------------------- SILHOUETTES UNITAIRES ------------------ */
+
+/* MITE — magenta. Corps fuselé, deux ailes qui battent, deux antennes. */
+const SHAPE_NORMAL_BODY = [
+   0.00,  0.52,
+   0.20,  0.16,
+   0.13, -0.28,
+   0.00, -0.46,
+  -0.13, -0.28,
+  -0.20,  0.16
+];
+
+/* CANONNIER — violet. Coque large, deux canons, épaulements. */
+const SHAPE_SHOOTER_BODY = [
+  -0.34, -0.24,
+   0.34, -0.24,
+   0.46,  0.10,
+   0.24,  0.36,
+  -0.24,  0.36,
+  -0.46,  0.10
+];
+
+/* INTERCEPTEUR — ambre. Dard effilé. */
+const SHAPE_FAST_BODY = [
+   0.00,  0.58,
+   0.21, -0.08,
+   0.10, -0.42,
+  -0.10, -0.42,
+  -0.21, -0.08
+];
+
+/* ÉLITE — rouge. Étoile à 8 branches. */
+const SHAPE_ELITE_STAR = (function () {
+  const a = [];
+  for (let i = 0; i < 16; i++) {
+    const ang = (i / 16) * TWO_PI - Math.PI / 2;
+    const r = (i % 2 === 0) ? 0.58 : 0.25;
+    a.push(Math.cos(ang) * r, Math.sin(ang) * r);
+  }
+  return a;
+})();
+
+/* ------------------------------------ DESSIN PAR TYPE --------------------- */
+
+function drawShipNormal(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase) {
+  const flap = 1 + Math.sin(t * 5.2 + phase) * 0.11;
+
+  eShape(c, SHAPE_NORMAL_BODY, cx, cy, s, cos, sin, col, w, opt(alpha, gs, true, 0.20));
+
+  // Aile gauche puis droite (miroir), en tracé ouvert : ça reste VECTORIEL.
+  for (let side = -1; side <= 1; side += 2) {
+    _unit.length = 10;
+    _unit[0] = side * 0.17;         _unit[1] = -0.10;
+    _unit[2] = side * 0.52 * flap;  _unit[3] = -0.36 * flap;
+    _unit[4] = side * 0.66 * flap;  _unit[5] =  0.06;
+    _unit[6] = side * 0.33;         _unit[7] =  0.27;
+    _unit[8] = side * 0.17;         _unit[9] =  0.12;
+    ePoly(c, _unit, cx, cy, s, cos, sin, col, w * 0.9, opt(alpha * 0.95, gs));
+  }
+
+  // Antennes
+  eLine(c, cx, cy, s, cos, sin,  0.07, -0.40,  0.25, -0.68, col, w * 0.6, opt(alpha * 0.75, gs));
+  eLine(c, cx, cy, s, cos, sin, -0.07, -0.40, -0.25, -0.68, col, w * 0.6, opt(alpha * 0.75, gs));
+
+  // Œil : le point de mire du joueur.
+  eDot(c, cx, cy, s, cos, sin, 0, -0.04, s * 0.13, col, opt(alpha, gs * 1.1));
+}
+
+function drawShipShooter(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase) {
+  eShape(c, SHAPE_SHOOTER_BODY, cx, cy, s, cos, sin, col, w, opt(alpha, gs, true, 0.20));
+
+  for (let side = -1; side <= 1; side += 2) {
+    // Canon
+    eLine(c, cx, cy, s, cos, sin, side * 0.27, 0.28, side * 0.27, 0.64, col, w * 1.35, opt(alpha, gs));
+    // Épaulement
+    _unit.length = 6;
+    _unit[0] = side * 0.46; _unit[1] =  0.10;
+    _unit[2] = side * 0.62; _unit[3] = -0.08;
+    _unit[4] = side * 0.50; _unit[5] =  0.26;
+    ePoly(c, _unit, cx, cy, s, cos, sin, col, w * 0.85, opt(alpha * 0.9, gs));
+    // Pointe supérieure
+    eLine(c, cx, cy, s, cos, sin, side * 0.18, -0.24, side * 0.29, -0.52, col, w * 0.7, opt(alpha * 0.8, gs));
+  }
+
+  // Anneau interne en rotation lente : le « réacteur » du canonnier.
+  const o = opt(alpha * 0.8, gs, false, 0, 3);
+  o.dash = [4, 5];
+  o.dashOffset = t * 26;
+  eRing(c, cx, cy, s, cos, sin, 0, 0.03, s * 0.24, w * 0.7, col, o);
+
+  eDot(c, cx, cy, s, cos, sin, 0, 0.03, s * 0.10, col, opt(alpha, gs * 1.15));
+}
+
+function drawShipFast(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase) {
+  eShape(c, SHAPE_FAST_BODY, cx, cy, s, cos, sin, col, w, opt(alpha, gs, true, 0.22));
+
+  for (let side = -1; side <= 1; side += 2) {
+    _unit.length = 6;
+    _unit[0] = side * 0.21; _unit[1] = -0.08;
+    _unit[2] = side * 0.52; _unit[3] = -0.48;
+    _unit[4] = side * 0.15; _unit[5] = -0.28;
+    ePoly(c, _unit, cx, cy, s, cos, sin, col, w * 0.9, opt(alpha, gs));
+  }
+
+  // Tuyères : elles pulsent, c'est ce qui vend la VITESSE.
+  const pulse = 0.62 + Math.abs(Math.sin(t * 11 + phase)) * 0.38;
+  for (let side = -1; side <= 1; side += 2) {
+    eLine(c, cx, cy, s, cos, sin, side * 0.075, -0.42, side * 0.075, -0.42 - 0.26 * pulse,
+          'playerThruster', w * 0.8, opt(alpha * pulse * 0.85, gs * 1.3));
+  }
+
+  eDot(c, cx, cy, s, cos, sin, 0, 0.12, s * 0.10, col, opt(alpha, gs * 1.1));
+}
+
+function drawShipElite(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase) {
+  const spin = t * 0.9 + phase;
+  const rc = Math.cos(spin), rs = Math.sin(spin);
+  // Rotation propre de l'étoile, composée avec l'orientation du vaisseau.
+  const ccos = cos * rc - sin * rs;
+  const csin = sin * rc + cos * rs;
+
+  eShape(c, SHAPE_ELITE_STAR, cx, cy, s, ccos, csin, col, w * 0.9, opt(alpha, gs, true, 0.16));
+
+  const o = opt(alpha * 0.85, gs, false, 0, 3);
+  o.dash = [6, 7];
+  o.dashOffset = -t * 42;
+  eRing(c, cx, cy, s, cos, sin, 0, 0, s * 0.38, w * 0.8, col, o);
+
+  _unit.length = 6;
+  _unit[0] =  0.00; _unit[1] =  0.30;
+  _unit[2] =  0.26; _unit[3] = -0.16;
+  _unit[4] = -0.26; _unit[5] = -0.16;
+  eShape(c, _unit, cx, cy, s, cos, sin, col, w * 0.75, opt(alpha * 0.9, gs));
+
+  eDot(c, cx, cy, s, cos, sin, 0, 0, s * 0.14, col, opt(alpha, gs * 1.2));
+}
+
+/** Aiguillage des silhouettes. */
+function drawEnemySilhouette(c, type, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase) {
+  switch (type) {
+    case 'shooter': drawShipShooter(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase); break;
+    case 'fast':    drawShipFast(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase);    break;
+    case 'elite':   drawShipElite(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase);   break;
+    case 'normal':
+    default:        drawShipNormal(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase);  break;
+  }
+}
+
+/* ------------------------------------ TÉLÉGRAPHIES ------------------------ */
+
+/** Anticipation de plongée : anneau qui se resserre, ligne d'intention vers la
+ *  cible RÉELLE, chevrons d'accélération. Le joueur voit l'attaque arriver. */
+function drawDiveTelegraph(c, e, cx, cy, s, k) {
+  const key = 'enemyDiving';
+
+  NEON.ring(c, cx, cy, s * (2.3 - 1.5 * k), 1.7, key, {
+    alpha: 0.18 + 0.55 * (1 - k), passes: 3, glowScale: 1.2
+  });
+
+  if (isFinite(e.diveAimX) && isFinite(e.diveAimY)) {
+    NEON.line(c, cx, cy + s * 0.6, e.diveAimX, e.diveAimY, key, 1.4, {
+      alpha: 0.08 + 0.26 * k, dash: [5, 14], dashOffset: -FRAME.time * 110, passes: 2
+    });
+    NEON.ring(c, e.diveAimX, e.diveAimY, 5 + 18 * k, 1.2, key, { alpha: 0.32 * k, passes: 2 });
+  }
+
+  const ch = s * (0.95 + k * 0.75);
+  NEON.polyline(c, [
+    cx - s * 0.36, cy + ch - s * 0.24,
+    cx,            cy + ch,
+    cx + s * 0.36, cy + ch - s * 0.24
+  ], key, 2, { alpha: 0.22 + 0.62 * k, passes: 3 });
+}
+
+/** Charge de tir : un éclat grandit au canon, deux traits convergent dessus. */
+function drawShotCharge(c, e, cx, cy, s, k) {
+  const key = PALETTE.bullet('enemy', e.type);
+  const a = e.aimAngle || Math.PI / 2;
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const mx = cx + ca * s * 0.74;
+  const my = cy + sa * s * 0.74;
+
+  // Noyau serré : la charge doit se LIRE comme un point qui grossit, pas comme
+  // une nappe diffuse qui noie la silhouette.
+  NEON.dot(c, mx, my, 1.0 + 3.2 * k, key, { alpha: 0.40 + 0.60 * k, glowScale: 0.75 + k * 0.45 });
+
+  const conv = (1 - k) * s * 0.9 + 4;
+  NEON.line(c, mx - sa * conv, my + ca * conv, mx - sa * 2.5, my + ca * 2.5, key, 1.4,
+            { alpha: k * 0.85, passes: 2 });
+  NEON.line(c, mx + sa * conv, my - ca * conv, mx + sa * 2.5, my - ca * 2.5, key, 1.4,
+            { alpha: k * 0.85, passes: 2 });
+}
+
+/** Éclair de bouche juste après le départ du coup. */
+function drawMuzzleFlash(c, e, cx, cy, s) {
+  const k = clamp(e.muzzle / 95, 0, 1);
+  if (k <= 0) return;
+  const key = PALETTE.bullet('enemy', e.type);
+  const a = e.muzzleAngle || Math.PI / 2;
+  const ca = Math.cos(a), sa = Math.sin(a);
+  const mx = cx + ca * s * 0.76;
+  const my = cy + sa * s * 0.76;
+
+  NEON.dot(c, mx, my, 2 + 7 * k, key, { alpha: k, glowScale: 1.4 });
+  NEON.line(c, mx, my, mx + ca * s * 1.15 * k, my + sa * s * 1.15 * k, key, 2.2,
+            { alpha: k * 0.7, passes: 3 });
+}
+
+/** Points de vie : des segments néon, pas une barre rouge/verte opaque.
+ *  Affichés UNIQUEMENT sur un ennemi déjà entamé : une jauge au-dessus de
+ *  chaque vaisseau transformerait l'écran en tableau de bord. */
+function drawEnemyHealth(c, e, cx, s) {
+  const n = Math.max(1, Math.min(6, e.maxHp | 0));
+  const seg = Math.max(4, s * 0.40);
+  const gap = 3;
+  const total = n * seg + (n - 1) * gap;
+  const y = e.y - 7;
+  let x = cx - total / 2;
+
+  for (let i = 0; i < n; i++) {
+    const alive = i < e.hp;
+    NEON.line(c, x, y, x + seg, y, alive ? 'combo' : 'neutral', 2,
+              { alpha: alive ? 0.85 : 0.16, passes: 2 });
+    x += seg + gap;
+  }
+}
+
+/* ------------------------------------ UN ENNEMI --------------------------- */
+
+function drawEnemyShip(c, tr, e, t) {
+  const st = enemyStats(e.type);
+  const cx = e.x + e.width / 2;
+  const cy = e.y + e.height / 2;
+
+  const flash = e.hitFlash > 0 ? clamp(e.hitFlash / Math.max(1, e.hitFlashMax || 90), 0, 1) : 0;
+  const tele = (e.diveState === 'telegraph')
+    ? 1 - clamp(e.diveTele / Math.max(1, e.diveTeleMax || TEMPO.DIVE_TELEGRAPH_MS), 0, 1)
+    : 0;
+  const chargeK = (e.charge > 0)
+    ? 1 - clamp(e.charge / Math.max(1, e.chargeMax || TEMPO.ENEMY_SHOT_TELEGRAPH_MS), 0, 1)
+    : 0;
+
+  const breathe = 1 + Math.sin(t * 3.2 + e.phase) * 0.035;
+  const s = e.width * 0.5 * breathe * (1 + flash * 0.20 + tele * 0.16);
+  const ang = e.faceAngle || 0;
+  const cos = Math.cos(ang), sin = Math.sin(ang);
+
+  // Couleur = IDENTITÉ du type ; vire vers la teinte de plongée en télégraphie.
+  const key = (tele > 0.02) ? 'enemyDiving' : st.paletteKey;
+  const w = clamp(s * 0.11, 1.3, 3.2);
+  const gs = 1 + tele * 0.9 + chargeK * 0.25;
+
+  // Traînée persistante : RÉSERVÉE à l'entrée et à la plongée. En formation, la
+  // marche latérale dépasse 300 px/s aux stages élevés : y laisser une traînée
+  // transformerait toute la vague en pâté lumineux.
+  const streaking = (!e.hasEntered || e.diveState === 'dive' || e.diveState === 'return');
+  if (tr && streaking) {
+    const sp = Math.hypot(e.vx || 0, e.vy || 0);
+    if (sp > 200) {
+      const kk = clamp((sp - 200) / 700, 0, 1);
+      NEON.line(tr, cx, cy, cx - (e.vx || 0) * 0.05, cy - (e.vy || 0) * 0.05, key,
+                Math.max(2, s * 0.5), { alpha: 0.28 + kk * 0.34, passes: 2 });
+    }
+  }
+
+  drawEnemySilhouette(c, e.type, cx, cy, s, cos, sin, key, w, 1, gs, t, e.phase);
+
+  // Flash blanc d'impact + étincelle orientée sur le point de contact.
+  if (flash > 0) {
+    // Halo court : un flash trop diffus efface la silhouette et le joueur perd
+    // l'information « lequel ai-je touché ».
+    drawEnemySilhouette(c, e.type, cx, cy, s * 1.05, cos, sin, '#ffffff',
+                        w * 1.05, flash * 0.78, 1.15, t, e.phase);
+    if (isFinite(e.lastHitX) && isFinite(e.lastHitY)) {
+      const dx = e.lastHitX - cx, dy = e.lastHitY - cy;
+      const d = Math.hypot(dx, dy) || 1;
+      NEON.line(c, e.lastHitX, e.lastHitY,
+                e.lastHitX + dx / d * 18 * flash, e.lastHitY + dy / d * 18 * flash,
+                '#ffffff', 2, { alpha: flash, passes: 3 });
+      NEON.dot(c, e.lastHitX, e.lastHitY, 2 + 5 * flash, '#ffffff', { alpha: flash });
+    }
+  }
+
+  if (tele > 0)    drawDiveTelegraph(c, e, cx, cy, s, tele);
+  if (chargeK > 0) drawShotCharge(c, e, cx, cy, s, chargeK);
+  if (e.muzzle > 0) drawMuzzleFlash(c, e, cx, cy, s);
+  if (e.maxHp > 1 && e.hp > 0 && e.hp < e.maxHp) drawEnemyHealth(c, e, cx, s);
+}
+
+/* ------------------------------------ LA PASSE ---------------------------- */
+
+/** Rendu de tous les ennemis.
+ *  L'ancien code faisait [...enemies].filter().sort() À CHAQUE FRAME (2 tableaux
+ *  + un tri de 16 à 30 éléments, 60 fois par seconde). En rendu additif l'ordre
+ *  de dessin n'a aucune importance : une seule boucle, zéro allocation. */
 function drawEnemies() {
   try {
-    // Si le stage est en transition, ne pas dessiner
-    if (stageSystem.stageCompleted || stageSystem.transitionActive) {
-      return;
+    if (typeof stageSystem !== 'undefined' && stageSystem &&
+        (stageSystem.stageCompleted || stageSystem.transitionActive)) return;
+    if (typeof NEON === 'undefined' || !NEON) return;
+
+    const c = ctx;
+    if (!c) return;
+
+    const t = FRAME.time;
+    const tr = (RENDER_CONFIG.trails && NEON.trail && NEON.isEnabled()) ? NEON.trail : null;
+
+    for (let i = 0; i < enemies.length; i++) {
+      const e = enemies[i];
+      if (!e || e.isDeleted) continue;
+      if (!isFinite(e.x) || !isFinite(e.y) || !(e.width > 0)) continue;
+      if (e.y > CANVAS_HEIGHT + 160 || e.y + e.height < -200) continue;
+      if (!e._rt) ensureEnemyRuntime(e);
+      drawEnemyShip(c, tr, e, t);
     }
-    
-    // Créer une copie sécurisée du tableau d'ennemis pour éviter les modifications pendant le rendu
-    let enemiesCopy;
-    try {
-      enemiesCopy = [...enemies].filter(enemy => enemy && !enemy.isDeleted);
-    } catch (e) {
-      console.warn("Erreur lors de la copie du tableau d'ennemis:", e);
-      enemiesCopy = [];
-    }
-    
-    // Dessiner les ennemis du plus bas au plus haut
-    enemiesCopy.sort((a, b) => (a.y || 0) - (b.y || 0))
-      .forEach(enemy => {
-        try {
-          // Vérifier que l'ennemi existe et a les propriétés nécessaires
-          if (!enemy || !enemy.x || !enemy.y || !enemy.width || !enemy.height || !enemy.type) {
-            return; // Ignorer les ennemis invalides
-          }
-          
-          // Corps principal de l'ennemi - Utiliser une couleur simple au lieu de gradients complexes
-          ctx.fillStyle = enemy.color || '#ff0000';
-          
-          // Formes simplifiées selon le type
-          if (enemy.type === 'normal') {
-            // Triangle
-            ctx.beginPath();
-            ctx.moveTo(enemy.x + enemy.width/2, enemy.y);
-            ctx.lineTo(enemy.x, enemy.y + enemy.height);
-            ctx.lineTo(enemy.x + enemy.width, enemy.y + enemy.height);
-            ctx.closePath();
-            ctx.fill();
-            
-            // Détail central (plus grand pour les ennemis plus grands)
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.7)';
-            ctx.beginPath();
-            ctx.arc(enemy.x + enemy.width/2, enemy.y + enemy.height/2, enemy.width/8, 0, Math.PI * 2);
-            ctx.fill();
-          } 
-          else if (enemy.type === 'shooter') {
-            // Rectangle avec un canon
-            ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
-            
-            // Canon (plus grand pour les ennemis plus grands)
-            ctx.fillStyle = 'white';
-            ctx.fillRect(
-              enemy.x + enemy.width/2 - enemy.width/10, 
-              enemy.y + enemy.height - enemy.height/3, 
-              enemy.width/5, 
-              enemy.height/3
-            );
-            
-            // Cercle central
-            ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
-            ctx.beginPath();
-            ctx.arc(enemy.x + enemy.width/2, enemy.y + enemy.height/2, enemy.width/6, 0, Math.PI * 2);
-            ctx.fill();
-          } 
-          else if (enemy.type === 'fast') {
-            // Forme aérodynamique simplifiée
-            ctx.beginPath();
-            ctx.moveTo(enemy.x + enemy.width/2, enemy.y);
-            ctx.lineTo(enemy.x, enemy.y + enemy.height);
-            ctx.lineTo(enemy.x + enemy.width, enemy.y + enemy.height);
-            ctx.closePath();
-            ctx.fill();
-            
-            // Traits aérodynamiques
-            ctx.strokeStyle = 'white';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            // Trait horizontal au centre
-            ctx.moveTo(enemy.x + enemy.width/4, enemy.y + enemy.height/2);
-            ctx.lineTo(enemy.x + enemy.width*3/4, enemy.y + enemy.height/2);
-            // Traits diagonaux
-            ctx.moveTo(enemy.x + enemy.width/4, enemy.y + enemy.height/3);
-            ctx.lineTo(enemy.x + enemy.width/2, enemy.y + enemy.height*2/3);
-            ctx.lineTo(enemy.x + enemy.width*3/4, enemy.y + enemy.height/3);
-            ctx.stroke();
-          } 
-          else {
-            // Fallback pour tout autre type
-            ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
-          }
-          
-          // Dessiner la santé (uniquement pour les ennemis avec plus de 1 HP)
-          if (enemy.hp > 1) {
-            const healthBarWidth = enemy.width * 0.8;
-            const healthBarHeight = 4; // Un peu plus épais pour les grands ennemis
-            const healthBarX = enemy.x + (enemy.width - healthBarWidth) / 2;
-            const healthBarY = enemy.y - healthBarHeight - 2;
-            
-            // Fond de la barre de vie
-            ctx.fillStyle = 'rgba(255, 0, 0, 0.5)';
-            ctx.fillRect(healthBarX, healthBarY, healthBarWidth, healthBarHeight);
-            
-            // Barre de vie
-            const maxHp = enemy.type === 'shooter' ? 2 : 1;
-            const healthPercentage = Math.min(1, Math.max(0, enemy.hp / maxHp));
-            ctx.fillStyle = 'rgba(0, 255, 0, 0.7)';
-            ctx.fillRect(healthBarX, healthBarY, healthBarWidth * healthPercentage, healthBarHeight);
-          }
-        } catch (e) {
-          console.warn("Erreur lors du rendu d'un ennemi:", e);
-          // Continuer avec les autres ennemis
-        }
-      });
-  } catch (e) {
-    console.error("Erreur lors du rendu des ennemis:", e);
+  } catch (err) {
+    console.error("Erreur lors du rendu des ennemis:", err);
   }
 }
 
-// Fonction utilitaire pour convertir hexadécimal en RGB
+/* =============================================================================
+ *  LEGACY — conservés pour ne rien casser chez les autres modules.
+ *  Les anciennes tables de couleurs qu'ils servaient ont disparu : tout passe
+ *  désormais par PALETTE.
+ * ========================================================================== */
+
+/** Conversion hex -> {r,g,b}. Délègue à PALETTE (source de vérité unique). */
 function hexToRgb(hex) {
-  // Sécurisation - si hex est undefined ou null, retourner une valeur par défaut
-  if (!hex) return { r: 255, g: 0, b: 0 };
-  
   try {
-    // Gestion des formats hex et rgb
-    if (typeof hex === 'string' && hex.startsWith('#')) {
-      // Format hexadécimal (#RRGGBB)
-      if (hex.length === 7) {
-        const r = parseInt(hex.slice(1, 3), 16);
-        const g = parseInt(hex.slice(3, 5), 16);
-        const b = parseInt(hex.slice(5, 7), 16);
-        return { r: isNaN(r) ? 0 : r, g: isNaN(g) ? 0 : g, b: isNaN(b) ? 0 : b };
-      }
-      // Format hexadécimal court (#RGB)
-      else if (hex.length === 4) {
-        const r = parseInt(hex.slice(1, 2), 16);
-        const g = parseInt(hex.slice(2, 3), 16);
-        const b = parseInt(hex.slice(3, 4), 16);
-        return { 
-          r: isNaN(r) ? 0 : r * 17, 
-          g: isNaN(g) ? 0 : g * 17, 
-          b: isNaN(b) ? 0 : b * 17 
-        };
-      }
-    } 
-    else if (typeof hex === 'string' && hex.startsWith('rgb')) {
-      // Format RGB déjà
-      const match = hex.match(/\d+/g);
-      if (match && match.length >= 3) {
-        return {
-          r: parseInt(match[0]),
-          g: parseInt(match[1]),
-          b: parseInt(match[2])
-        };
-      }
-    }
+    const c = PALETTE.hexToRgb(typeof hex === 'string' ? hex : '#ff2bd6');
+    return { r: c[0], g: c[1], b: c[2] };
   } catch (e) {
-    console.error("Erreur lors de la conversion de couleur:", e);
+    return { r: 255, g: 43, b: 214 };
   }
-  
-  // Valeur par défaut si le format n'est pas reconnu ou en cas d'erreur
-  return { r: 255, g: 0, b: 0 };
 }
 
-// Fonction utilitaire pour ajuster la couleur (éclaircir ou assombrir)
+/** Éclaircit / assombrit une couleur. `amount` en unités 0-255 comme avant. */
 function adjustColor(color, amount) {
   try {
-    // Si la couleur est au format hexadécimal, la convertir en RGB
-    const rgb = hexToRgb(color);
-    
-    // Ajuster chaque composante
-    const r = Math.max(0, Math.min(255, rgb.r + amount));
-    const g = Math.max(0, Math.min(255, rgb.g + amount));
-    const b = Math.max(0, Math.min(255, rgb.b + amount));
-    
-    // Retourner la nouvelle couleur au format RGB
-    return `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
+    const t = clamp(Math.abs(amount) / 255, 0, 1);
+    const hex = (typeof color === 'string' && color.charAt(0) === '#')
+      ? color : PALETTE.get(color).glow;
+    return amount >= 0 ? PALETTE.lighten(hex, t) : PALETTE.darken(hex, t);
   } catch (e) {
-    console.error("Erreur lors de l'ajustement de couleur:", e);
-    return color; // Retourner la couleur d'origine en cas d'erreur
+    return color;
   }
 }
 
-// Créer une formation d'ennemis à l'entrée
-function createFormation(count, formationType, choreographyType, stage = 1) {
-  // Vider le tableau d'ennemis précédents si nécessaire
-  enemies = [];
-  
-  // Paramètres de base
-  const formationSize = Math.min(count, 30); // Limiter pour éviter les surcharges
-  
-  // Types d'ennemis selon le stage actuel
-  let normalRatio = 0.7;
-  let shooterRatio = 0.15;
-  let fastRatio = 0.15;
-  
-  // Ajuster les ratios en fonction du stage
-  if (stage >= 3) {
-    normalRatio = 0.5;
-    shooterRatio = 0.25;
-    fastRatio = 0.25;
-  }
-  if (stage >= 6) {
-    normalRatio = 0.3;
-    shooterRatio = 0.35;
-    fastRatio = 0.35;
-  }
-  
-  // Préparer un tableau avec les types d'ennemis à utiliser
-  const enemyTypes = [];
-  for (let i = 0; i < Math.ceil(formationSize * normalRatio); i++) enemyTypes.push("normal");
-  for (let i = 0; i < Math.ceil(formationSize * shooterRatio); i++) enemyTypes.push("shooter");
-  for (let i = 0; i < Math.ceil(formationSize * fastRatio); i++) enemyTypes.push("fast");
-  
-  // Mélanger pour une distribution aléatoire
-  for (let i = enemyTypes.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [enemyTypes[i], enemyTypes[j]] = [enemyTypes[j], enemyTypes[i]];
-  }
-  
-  // Limiter à la taille exacte demandée
-  while (enemyTypes.length > formationSize) {
-    enemyTypes.pop();
-  }
-  
-  // Définir les positions initiales et les trajectoires selon la chorégraphie
-  const positions = calculateFormationPositions(formationType, formationSize);
-  const entryPaths = calculateEntryPaths(choreographyType, positions);
-  
-  // Créer les ennemis avec leurs trajectoires
-  for (let i = 0; i < formationSize; i++) {
-    // Positions de départ, en dehors de l'écran selon la chorégraphie
-    const startPosition = entryPaths[i].start;
-    const targetPosition = positions[i];
-    
-    // Créer l'ennemi avec une taille uniforme
-    const baseSize = 50; // Taille standard pour tous
-    const enemy = {
-      x: startPosition.x,
-      y: startPosition.y,
-      width: baseSize,
-      height: baseSize,
-      type: enemyTypes[i],
-      pattern: ENEMY_PATTERNS.FORMATION,
-      formationIndex: i,          // Index dans la formation
-      entryPath: entryPaths[i],   // Chemin d'entrée à suivre
-      entryProgress: 0,           // Progression sur le chemin (0-1)
-      targetX: targetPosition.x,  // Position finale dans la formation
-      targetY: targetPosition.y,
-      hasEntered: false,          // Pas encore à sa position finale
-      color: getEnemyColor(enemyTypes[i]),
-      hp: getEnemyHP(enemyTypes[i], stage),
-      speedModifier: 1,
-      shotChance: getEnemyShotChance(enemyTypes[i], stage),
-      startFormationTime: Date.now() + i * 100 // Réduit de 200 à 100ms pour une entrée plus rapide
-    };
-    
-    enemies.push(enemy);
-  }
-}
-
-// Calculer les positions finales selon le type de formation
-function calculateFormationPositions(formationType, count) {
-  const positions = [];
-  const centerX = CANVAS_WIDTH / 2;
-  const topY = 80; // Position en haut de l'écran
-  const spacing = 60; // Espacement entre les ennemis
-  
-  switch (formationType) {
-    case FORMATIONS.GRID:
-      // Formation classique en grille (comme Galaga original)
-      const cols = 8;
-      const rows = Math.ceil(count / cols);
-      for (let i = 0; i < count; i++) {
-        const row = Math.floor(i / cols);
-        const col = i % cols;
-        positions.push({
-          x: centerX - (cols * spacing / 2) + col * spacing,
-          y: topY + row * spacing
-        });
-      }
-      break;
-      
-    case FORMATIONS.DIAMOND:
-      // Formation en losange
-      const diamondSize = Math.ceil(Math.sqrt(count));
-      let index = 0;
-      for (let row = 0; row < diamondSize; row++) {
-        const rowWidth = row < diamondSize / 2 ? row * 2 + 1 : (diamondSize - row) * 2 - 1;
-        for (let col = 0; col < rowWidth && index < count; col++) {
-          positions.push({
-            x: centerX - (rowWidth * spacing / 2) + col * spacing,
-            y: topY + row * spacing
-          });
-          index++;
-        }
-      }
-      break;
-      
-    case FORMATIONS.CIRCLE:
-      // Formation en cercle
-      const radius = Math.min(count * 10, 150);
-      for (let i = 0; i < count; i++) {
-        const angle = (i / count) * Math.PI * 2;
-        positions.push({
-          x: centerX + Math.cos(angle) * radius,
-          y: topY + 100 + Math.sin(angle) * radius
-        });
-      }
-      break;
-      
-    case FORMATIONS.DOUBLE_ROW:
-      // Formation en double ligne (style Galaga)
-      const enemiesPerRow = Math.ceil(count / 2);
-      for (let i = 0; i < count; i++) {
-        const row = i < enemiesPerRow ? 0 : 1;
-        const col = i % enemiesPerRow;
-        positions.push({
-          x: centerX - (enemiesPerRow * spacing / 2) + col * spacing,
-          y: topY + row * spacing
-        });
-      }
-      break;
-      
-    default:
-      // Formation en ligne par défaut
-      for (let i = 0; i < count; i++) {
-        positions.push({
-          x: centerX - (count * spacing / 2) + i * spacing,
-          y: topY
-        });
-      }
-  }
-  
-  return positions;
-}
-
-// Calculer les chemins d'entrée selon la chorégraphie
-function calculateEntryPaths(choreographyType, targetPositions) {
-  const entryPaths = [];
-  const offscreenY = -100; // Position au-dessus de l'écran
-  
-  switch (choreographyType) {
-    case ENTRY_CHOREOGRAPHIES.SPIRAL:
-      // Les ennemis entrent en spirale
-      for (let i = 0; i < targetPositions.length; i++) {
-        const target = targetPositions[i];
-        const angleOffset = (i / targetPositions.length) * Math.PI * 2;
-        entryPaths.push({
-          start: { x: CANVAS_WIDTH / 2, y: offscreenY },
-          controlPoints: [
-            { x: CANVAS_WIDTH / 2 + Math.cos(angleOffset) * 200, y: 100 + Math.sin(angleOffset) * 100 },
-            { x: CANVAS_WIDTH / 2 + Math.cos(angleOffset + Math.PI) * 200, y: 200 + Math.sin(angleOffset + Math.PI) * 100 }
-          ],
-          end: target
-        });
-      }
-      break;
-      
-    case ENTRY_CHOREOGRAPHIES.ZIGZAG:
-      // Entrée en zigzag de gauche à droite
-      for (let i = 0; i < targetPositions.length; i++) {
-        const target = targetPositions[i];
-        const side = i % 2 === 0 ? -1 : 1;
-        entryPaths.push({
-          start: { x: side > 0 ? -50 : CANVAS_WIDTH + 50, y: offscreenY + i * 20 },
-          controlPoints: [
-            { x: CANVAS_WIDTH / 4 * (side < 0 ? 3 : 1), y: 100 },
-            { x: CANVAS_WIDTH / 4 * (side < 0 ? 1 : 3), y: 200 }
-          ],
-          end: target
-        });
-      }
-      break;
-      
-    case ENTRY_CHOREOGRAPHIES.CURVE_LEFT:
-      // Entrée en courbe depuis la gauche
-      for (let i = 0; i < targetPositions.length; i++) {
-        const target = targetPositions[i];
-        entryPaths.push({
-          start: { x: -50, y: 100 + (i * 20) % 200 },
-          controlPoints: [
-            { x: CANVAS_WIDTH / 4, y: 50 + (i * 30) % 150 },
-            { x: CANVAS_WIDTH / 2, y: 100 }
-          ],
-          end: target
-        });
-      }
-      break;
-      
-    case ENTRY_CHOREOGRAPHIES.CURVE_RIGHT:
-      // Entrée en courbe depuis la droite
-      for (let i = 0; i < targetPositions.length; i++) {
-        const target = targetPositions[i];
-        entryPaths.push({
-          start: { x: CANVAS_WIDTH + 50, y: 100 + (i * 20) % 200 },
-          controlPoints: [
-            { x: CANVAS_WIDTH * 3/4, y: 50 + (i * 30) % 150 },
-            { x: CANVAS_WIDTH / 2, y: 100 }
-          ],
-          end: target
-        });
-      }
-      break;
-      
-    case ENTRY_CHOREOGRAPHIES.SPLIT:
-      // Division en deux groupes
-      for (let i = 0; i < targetPositions.length; i++) {
-        const target = targetPositions[i];
-        const side = i < targetPositions.length / 2 ? -1 : 1;
-        entryPaths.push({
-          start: { x: CANVAS_WIDTH / 2, y: offscreenY },
-          controlPoints: [
-            { x: CANVAS_WIDTH / 2 + side * 200, y: 100 },
-            { x: target.x, y: 150 }
-          ],
-          end: target
-        });
-      }
-      break;
-      
-    default:
-      // Entrée simple en ligne droite
-      for (let i = 0; i < targetPositions.length; i++) {
-        const target = targetPositions[i];
-        entryPaths.push({
-          start: { x: target.x, y: offscreenY - i * 30 },
-          controlPoints: [
-            { x: target.x, y: (offscreenY + target.y) / 2 }
-          ],
-          end: target
-        });
-      }
-  }
-  
-  return entryPaths;
-}
-
-// Fonction utilitaire pour calculer un point sur une courbe de Bézier
+/** Point sur une courbe de Bézier cubique. Signature historique conservée. */
 function calculateBezierPoint(t, p0, p1, p2, p3) {
-  // Protection contre les valeurs NaN
-  if (isNaN(t) || t < 0 || t > 1) {
-    t = Math.max(0, Math.min(1, t || 0));
-  }
-  
-  // Vérification que tous les points sont valides
-  if (!p0 || !p1 || !p2 || !p3 || 
-      typeof p0.x !== 'number' || typeof p0.y !== 'number' ||
-      typeof p1.x !== 'number' || typeof p1.y !== 'number' ||
-      typeof p2.x !== 'number' || typeof p2.y !== 'number' ||
-      typeof p3.x !== 'number' || typeof p3.y !== 'number') {
-    
-    // En cas de données invalides, retourner un point par défaut
-    console.warn("Points invalides dans calculateBezierPoint");
-    return { x: 0, y: 0 };
-  }
-  
-  try {
-    const oneMinusT = 1 - t;
-    const oneMinusT2 = oneMinusT * oneMinusT;
-    const oneMinusT3 = oneMinusT2 * oneMinusT;
-    const t2 = t * t;
-    const t3 = t2 * t;
-    
-    // Calcul avec protection contre les dépassements numériques
-    const x = oneMinusT3 * p0.x + 
-              3 * oneMinusT2 * t * p1.x + 
-              3 * oneMinusT * t2 * p2.x + 
-              t3 * p3.x;
-              
-    const y = oneMinusT3 * p0.y + 
-              3 * oneMinusT2 * t * p1.y + 
-              3 * oneMinusT * t2 * p2.y + 
-              t3 * p3.y;
-    
-    // Vérifier que le résultat est valide
-    if (isNaN(x) || isNaN(y) || !isFinite(x) || !isFinite(y)) {
-      // Interpolation linéaire en cas d'échec
-      return {
-        x: p0.x + t * (p3.x - p0.x),
-        y: p0.y + t * (p3.y - p0.y)
-      };
-    }
-    
-    return { x, y };
-  } catch (e) {
-    console.error("Erreur dans calculateBezierPoint:", e);
-    // Fallback: interpolation linéaire simple
-    return {
-      x: p0.x + t * (p3.x - p0.x),
-      y: p0.y + t * (p3.y - p0.y)
-    };
-  }
-} 
+  if (!isFinite(t)) t = 0;
+  t = clamp(t, 0, 1);
+  if (!p0 || !p1 || !p2 || !p3) return { x: 0, y: 0 };
+  bezierXY(t, p0.x, p0.y, p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+  return { x: _bz.x, y: _bz.y };
+}
+
+/* Exposition explicite (debug console / modules chargés plus tard). */
+window.ENEMY_TYPES = ENEMY_TYPES;
+window.createFormation = createFormation;
+window.updateEnemies = updateEnemies;
+window.drawEnemies = drawEnemies;

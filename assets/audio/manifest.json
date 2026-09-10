@@ -1,0 +1,14 @@
+{
+  "_lisezmoi": "POUR AJOUTER VOS PISTES : déposez le fichier dans assets/audio/musique/ (ou assets/audio/narration/) puis ajoutez simplement son nom entre guillemets dans la liste \"pistes\" correspondante ci-dessous, séparé par une virgule. C'est tout.",
+  "_exemple": "\"pistes\": [\"ma_musique.mp3\", \"autre_piste.ogg\", { \"fichier\": \"trop_fort.wav\", \"titre\": \"Assaut final\", \"gain\": 0.6 }]",
+  "_note": "Une entrée peut être un simple nom de fichier, ou un objet { fichier, titre, gain } — `gain` (0 à 1) permet d'équilibrer une piste trop forte sans la ré-encoder. Ce manifeste est la SEULE source de vérité : le jeu ne sonde plus les dossiers, c'est ce qui garantit zéro erreur 404 en console. Un manifeste vide est parfaitement valide : la nappe musicale procédurale (js/audio/sfx.js) prend alors le relais et les bruitages, eux, sont toujours 100 % synthétisés.",
+  "version": 1,
+  "musique": {
+    "dossier": "assets/audio/musique/",
+    "pistes": []
+  },
+  "narration": {
+    "dossier": "assets/audio/narration/",
+    "pistes": []
+  }
+}

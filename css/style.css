@@ -1,49 +1,368 @@
-/* Styles de base */
-body {
-  margin: 0;
-  overflow: hidden;
-  background: #000;
+/* =============================================================================
+   galabob — FEUILLE DE STYLE
+   -----------------------------------------------------------------------------
+   Le jeu vit dans le canvas : le CSS n'a que trois responsabilités.
+     1. Poser un noir profond, sans débordement ni rebond de défilement.
+     2. NE PAS déformer le canvas — js/utils.js (resizeCanvas) écrit lui-même
+        canvas.style.width/height en pixels CSS et dimensionne le backing store
+        à taille × devicePixelRatio. Les règles ci-dessous ne servent que de
+        filet avant le premier redimensionnement ; les styles en ligne posés
+        par le JS l'emportent toujours.
+     3. Habiller le seul morceau d'interface resté en HTML : le panneau audio.
+
+   Typographie : uniquement des familles présentes sur les systèmes, aucune
+   requête réseau, aucun CDN. Repli progressif jusqu'à Arial.
+   ========================================================================== */
+
+:root {
+  /* Fonds — miroir de PALETTE.bg (js/core/palette.js) */
+  --bg-deep:   #02030a;
+  --bg-base:   #05060f;
+  --bg-haze:   #0a1024;
+
+  /* Traits et textes — miroir de PALETTE.ui */
+  --text:      #e8f6ff;
+  --text-dim:  rgba(178, 214, 240, 0.55);
+  --text-warm: #ffe8c2;
+  --accent:    #3df5ff;
+  --accent-alt:#ff2bd6;
+  --good:      #00ffc8;
+  --warn:      #ff2b55;
+
+  --line:      rgba(61, 245, 255, 0.32);
+  --line-soft: rgba(61, 245, 255, 0.14);
+  --glass:     rgba(4, 8, 20, 0.86);
+  --glow:      0 0 24px rgba(61, 245, 255, 0.22);
+
+  --font-ui: "Avenir Next Condensed", "HelveticaNeue-CondensedBold",
+             "Roboto Condensed", "Arial Narrow", "Segoe UI", Arial, sans-serif;
+  --font-num: "SF Mono", "JetBrains Mono", "Roboto Mono", Menlo, Consolas,
+              "Courier New", monospace;
+
+  color-scheme: dark;
 }
-canvas {
-  position: fixed;
-  top: 0;
-  left: 0;
-  width: 100%;
+
+/* ---------------------------------------------------------------- document */
+
+html,
+body {
   height: 100%;
   margin: 0;
   padding: 0;
+  overflow: hidden;
+  overscroll-behavior: none;          /* pas de rebond élastique en bord d'écran */
+  background: var(--bg-deep);
+  color: var(--text);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Ajout des styles pour les contrôles de volume */
-.volume-controls {
+body {
+  /* Halo très sombre : ce qui dépasse du canvas reste dans la même ambiance. */
+  background:
+    radial-gradient(120% 90% at 50% 0%, var(--bg-haze) 0%, var(--bg-deep) 62%),
+    var(--bg-deep);
+  /* Le jeu se joue au clavier et à la souris : pas de sélection accidentelle,
+     pas de zoom par double-tap, pas de surbrillance de tap sur mobile. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+
+::selection {
+  background: rgba(61, 245, 255, 0.28);
+  color: #ffffff;
+}
+
+/* ------------------------------------------------------------------ canvas */
+
+canvas#gameCanvas {
   position: fixed;
-  bottom: 20px;
-  right: 20px;
-  background: rgba(0, 0, 0, 0.7);
-  padding: 10px;
-  border-radius: 5px;
-  display: none;
-  color: white;
-  font-family: Arial, sans-serif;
+  top: 0;
+  left: 0;
+  width: 100%;                /* filet avant le premier resizeCanvas() */
+  height: 100%;
+  display: block;
+  margin: 0;
+  padding: 0;
+  background: var(--bg-base);
+  outline: none;
+  /* Surtout PAS d'image-rendering ni de transform ici : le rendu est déjà
+     calibré au devicePixelRatio par js/utils.js. */
 }
 
-.volume-slider {
-  width: 100%;
-  margin: 10px 0;
+/* =============================================================================
+   PANNEAU AUDIO
+   Affiché/masqué par toggleAudioControls() qui écrit style.display = 'block'.
+   Le panneau est donc conçu pour un affichage en `block` (pas de flex sur le
+   conteneur lui-même, il serait écrasé par le style en ligne).
+   ========================================================================== */
+
+.volume-controls {
+  display: none;
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 20;
+
+  box-sizing: border-box;
+  width: 296px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 36px);
+  overflow-y: auto;
+  padding: 18px 18px 16px;
+
+  background:
+    linear-gradient(180deg, rgba(61, 245, 255, 0.07) 0%, rgba(4, 8, 20, 0) 42%),
+    var(--glass);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow:
+    var(--glow),
+    inset 0 1px 0 rgba(168, 251, 255, 0.16),
+    0 18px 48px rgba(0, 0, 0, 0.65);
+
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  letter-spacing: 0.04em;
+
+  animation: panel-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Verre dépoli quand le navigateur sait le faire (sinon : fond opaque). */
+@supports (backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px)) {
+  .volume-controls {
+    background:
+      linear-gradient(180deg, rgba(61, 245, 255, 0.09) 0%, rgba(4, 8, 20, 0) 42%),
+      rgba(4, 8, 20, 0.62);
+    -webkit-backdrop-filter: blur(14px) saturate(140%);
+    backdrop-filter: blur(14px) saturate(140%);
+  }
+}
+
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.97); }
+  to   { opacity: 1; transform: none; }
+}
+
+.volume-controls h3 {
+  margin: 0 0 16px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line-soft);
+
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  color: var(--accent);
+  text-shadow: 0 0 12px rgba(61, 245, 255, 0.55);
+}
+
+.volume-group {
+  margin-bottom: 14px;
 }
 
 .volume-label {
   display: flex;
   justify-content: space-between;
-  margin-bottom: 5px;
+  align-items: baseline;
+  margin-bottom: 7px;
+
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--text-dim);
 }
+
+.volume-label span:last-child {
+  font-family: var(--font-num);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  text-shadow: 0 0 10px rgba(61, 245, 255, 0.45);
+}
+
+/* ------------------------------------------------------------- curseurs -- */
+
+.volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.volume-slider::-webkit-slider-runnable-track {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(61, 245, 255, 0.55), rgba(61, 245, 255, 0.12));
+}
+
+.volume-slider::-moz-range-track {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(61, 245, 255, 0.55), rgba(61, 245, 255, 0.12));
+}
+
+.volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5.5px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(61, 245, 255, 0.18), 0 0 16px rgba(61, 245, 255, 0.9);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.volume-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(61, 245, 255, 0.18), 0 0 16px rgba(61, 245, 255, 0.9);
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.volume-slider:hover::-webkit-slider-thumb,
+.volume-slider:active::-webkit-slider-thumb {
+  transform: scale(1.18);
+  box-shadow: 0 0 0 4px rgba(61, 245, 255, 0.24), 0 0 22px rgba(61, 245, 255, 1);
+}
+
+.volume-slider:hover::-moz-range-thumb,
+.volume-slider:active::-moz-range-thumb {
+  transform: scale(1.18);
+  box-shadow: 0 0 0 4px rgba(61, 245, 255, 0.24), 0 0 22px rgba(61, 245, 255, 1);
+}
+
+.volume-slider:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+/* ------------------------------------------------------------ cases ------ */
 
 .checkbox-container {
   display: flex;
-  align-items: center;
-  margin: 10px 0;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0;
 }
 
 .checkbox-container input {
-  margin-right: 10px;
-} 
+  flex: 0 0 auto;
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.checkbox-container label {
+  font-size: 11.5px;
+  line-height: 1.35;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.checkbox-container input:checked + label {
+  color: var(--text);
+}
+
+/* ------------------------------------------------------------ bouton ----- */
+
+#closeVolumeControls {
+  display: block;
+  width: 100%;
+  margin-top: 16px;
+  padding: 10px 12px;
+
+  background: rgba(61, 245, 255, 0.08);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--accent);
+
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.22em;
+
+  cursor: pointer;
+  transition: background 140ms ease, box-shadow 140ms ease, transform 90ms ease;
+}
+
+#closeVolumeControls:hover {
+  background: rgba(61, 245, 255, 0.18);
+  box-shadow: 0 0 18px rgba(61, 245, 255, 0.35);
+}
+
+#closeVolumeControls:active {
+  transform: translateY(1px) scale(0.99);
+}
+
+#closeVolumeControls:focus-visible {
+  outline: 1px solid var(--accent);
+  outline-offset: 3px;
+}
+
+/* ------------------------------------------------------- barre de défil. -- */
+
+.volume-controls::-webkit-scrollbar { width: 8px; }
+.volume-controls::-webkit-scrollbar-track { background: transparent; }
+.volume-controls::-webkit-scrollbar-thumb {
+  background: rgba(61, 245, 255, 0.22);
+  border-radius: 4px;
+}
+
+/* =============================================================================
+   ADAPTATIONS
+   ========================================================================== */
+
+/* Écrans étroits : le panneau devient une feuille collée en bas. */
+@media (max-width: 560px) {
+  .volume-controls {
+    right: 10px;
+    left: 10px;
+    bottom: 10px;
+    width: auto;
+    max-width: none;
+    border-radius: 16px;
+    padding: 14px 14px 12px;
+  }
+}
+
+/* Écrans bas (fenêtre écrasée) : on comprime le rythme vertical. */
+@media (max-height: 520px) {
+  .volume-controls { padding: 12px 14px; }
+  .volume-controls h3 { margin-bottom: 10px; padding-bottom: 7px; }
+  .volume-group { margin-bottom: 9px; }
+  .checkbox-container { margin: 8px 0; }
+  #closeVolumeControls { margin-top: 10px; padding: 8px 10px; }
+}
+
+/* Respect des préférences d'accessibilité. */
+@media (prefers-reduced-motion: reduce) {
+  .volume-controls { animation: none; }
+  .volume-slider::-webkit-slider-thumb,
+  .volume-slider::-moz-range-thumb,
+  #closeVolumeControls { transition: none; }
+}
+
+/* Impression : le jeu n'a rien à y faire. */
+@media print {
+  body { display: none; }
+}

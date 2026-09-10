@@ -1,792 +1,841 @@
-// Système Audio
+/* =============================================================================
+ *  galabob — SYSTÈME AUDIO (pistes du propriétaire + narration + réglages)
+ * -----------------------------------------------------------------------------
+ *  CE QUI A ÉTÉ SUPPRIMÉ, ET POURQUOI
+ *  ----------------------------------
+ *  • Le SONDAGE PAR FORCE BRUTE (scanAllAudioFiles / listDirectoryFiles /
+ *    isAudioFilePlayable en boucle) : il fabriquait 2112 requêtes HTTP au
+ *    démarrage — 16 noms génériques × 6 extensions × 11 variantes × 2 dossiers —
+ *    et déversait ~190 erreurs 404 dans la console. Remplacé par la lecture
+ *    d'UN SEUL fichier : assets/audio/manifest.json.
+ *  • Le setTimeout de 5000 ms qui retardait `audioFilesReady` : il bloquait le
+ *    lancement du jeu de 5 à 7 secondes. Le jeu démarre maintenant
+ *    INSTANTANÉMENT ; l'audio se prépare en tâche de fond.
+ *  • Les chemins en dur inexistants ('rodrigo.wav', 'Guillautine.mp3') qui
+ *    étaient réinjectés dans les listes quand le sondage échouait : ils
+ *    garantissaient une erreur de lecture à chaque partie.
+ *  • Le bonus de narration accordé À CHAQUE ÉCHEC : la touche N était un
+ *    générateur de score infini (+100 points par pression, sans même un son).
+ *    Le bonus n'est plus accordé QUE si une narration a été écoutée jusqu'au
+ *    bout, avec en plus un délai de garde.
+ *
+ *  COMMENT LE PROPRIÉTAIRE AJOUTE SES PISTES
+ *  -----------------------------------------
+ *  1. déposer les fichiers dans assets/audio/musique/ (ou narration/)
+ *  2. ajouter leur nom dans assets/audio/manifest.json
+ *  Aucune détection magique : le manifeste est la seule source de vérité, et
+ *  c'est précisément ce qui garantit ZÉRO 404 en console.
+ *
+ *  BRUITAGES
+ *  ---------
+ *  Ce fichier ne synthétise RIEN : tout le bruitage est dans js/audio/sfx.js
+ *  (objet global `SFX`, 100 % procédural). Ici on ne fait que lui transmettre
+ *  les réglages des curseurs. Si sfx.js n'est pas chargé, tout continue de
+ *  fonctionner, simplement sans bruitages.
+ *
+ *  API PUBLIQUE CONSERVÉE (appelée par input.js / menus.js / hud.js / stages.js
+ *  / main.js — aucune signature n'a changé) :
+ *    audioConfig, audioFilesReady, backgroundMusic, narrationAudio,
+ *    initAudioLists(), playRandomMusic(), changeRandomMusic(),
+ *    playRandomNarration(forceNew), triggerRandomNarration(),
+ *    applyNarrationBonus(message), enableGameAudio(), toggleAudioControls(),
+ *    updateMusicVolume(v), updateNarrationVolume(v), updateSFXVolume(v),
+ *    isAudioFilePlayable(path)
+ * ========================================================================== */
+
+/* -----------------------------------------------------------------------------
+ *  Préférences persistées (localStorage) — lecture défensive
+ * -------------------------------------------------------------------------- */
+function _audioReadNumber(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return fallback;
+    const v = parseFloat(raw);
+    return (isFinite(v) && v >= 0 && v <= 1) ? v : fallback;
+  } catch (e) { return fallback; }
+}
+
+/** Lit un booléen persisté. Si la clé n'existe pas, écrit la valeur par défaut :
+ *  main.js relit `soundEnabled` juste après nous, il doit trouver la même chose. */
+function _audioReadBool(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw === null) {
+      localStorage.setItem(key, fallback ? 'true' : 'false');
+      return fallback;
+    }
+    return raw === 'true';
+  } catch (e) { return fallback; }
+}
+
+function _audioPersist(key, value) {
+  try { localStorage.setItem(key, String(value)); } catch (e) { /* ignoré */ }
+}
+
+function _audioNow() {
+  return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+}
+
+function _audioClamp01(v) {
+  v = Number(v);
+  if (!isFinite(v)) return 0;
+  return v < 0 ? 0 : (v > 1 ? 1 : v);
+}
+
+/* -----------------------------------------------------------------------------
+ *  CONFIGURATION AUDIO
+ * -------------------------------------------------------------------------- */
 const audioConfig = {
-  musicVolume: localStorage.getItem('musicVolume') ? parseFloat(localStorage.getItem('musicVolume')) : 0.5,
-  narrationVolume: localStorage.getItem('narrationVolume') ? parseFloat(localStorage.getItem('narrationVolume')) : 0.8,
-  sfxVolume: localStorage.getItem('sfxVolume') ? parseFloat(localStorage.getItem('sfxVolume')) : 0.7,
+  musicVolume: _audioReadNumber('musicVolume', 0.5),
+  narrationVolume: _audioReadNumber('narrationVolume', 0.8),
+  sfxVolume: _audioReadNumber('sfxVolume', 0.7),
+
   currentMusic: null,
   currentNarration: null,
-  musicList: [], // Sera rempli automatiquement
-  narrationList: [], // Sera rempli automatiquement
-  playedMusicList: [], // Liste des musiques déjà jouées dans le cycle actuel
-  playedNarrationList: [], // Liste des narrations déjà jouées dans le cycle actuel
-  originalMusicVolume: 0, // Pour restaurer le volume après la narration
-  narrationPoints: 100, // Points gagnés à la fin d'une narration
-  soundEnabled: false, // Indique si le son est activé par l'utilisateur
-  fallbackToDefault: true, // Utiliser les fichiers par défaut en cas d'erreur
-  autoAdjustVolume: localStorage.getItem('autoAdjustVolume') !== 'false', // Ajuster automatiquement le volume pendant les narrations
-  useFadeEffects: localStorage.getItem('useFadeEffects') !== 'false' // Utiliser les effets de fondu
+
+  // Listes de CHEMINS (chaînes) — hud.js les affiche telles quelles.
+  musicList: [],
+  narrationList: [],
+  playedMusicList: [],
+  playedNarrationList: [],
+
+  // Métadonnées optionnelles issues du manifeste, indexées par chemin.
+  trackInfo: Object.create(null),
+
+  originalMusicVolume: 0,
+  narrationPoints: 100,
+
+  // Le son est ACTIF par défaut : il n'existe aucune interface pour le
+  // réactiver proprement, et le contexte audio ne démarre de toute façon
+  // qu'au premier geste utilisateur (politique autoplay des navigateurs).
+  soundEnabled: _audioReadBool('soundEnabled', true),
+
+  autoAdjustVolume: _audioReadBool('autoAdjustVolume', true),
+  useFadeEffects: _audioReadBool('useFadeEffects', true),
+
+  // Nappe musicale procédurale (js/audio/sfx.js) : le jeu n'est jamais muet,
+  // même sans une seule piste dans assets/audio/musique.
+  proceduralMusic: _audioReadBool('proceduralMusic', true),
+
+  // Routage des <audio> dans le graphe Web Audio (permet le ducking et le
+  // limiteur commun). Passer à false désactive proprement le routage.
+  routeThroughWebAudio: true,
+
+  manifestUrl: 'assets/audio/manifest.json',
+  manifestLoaded: false,
+  manifestError: null,
+
+  musicFadeMs: 420,      // durée d'un fondu de musique, en ms
+  fallbackToDefault: false  // conservé pour compatibilité, plus utilisé
 };
 
-// Variable pour suivre l'état d'initialisation des fichiers audio
-let audioFilesReady = false;
+/* -----------------------------------------------------------------------------
+ *  `audioFilesReady` — conservée pour menus.js.
+ *  Plus rien ne bloque : le jeu est jouable immédiatement, avec ou sans piste.
+ *  On la laisse à `true` dès le départ pour que le menu n'affiche jamais un
+ *  faux « Chargement des fichiers audio… ».
+ * -------------------------------------------------------------------------- */
+let audioFilesReady = true;
 
-// Éléments audio
+/* -----------------------------------------------------------------------------
+ *  ÉLÉMENTS AUDIO
+ * -------------------------------------------------------------------------- */
 const backgroundMusic = new Audio();
-backgroundMusic.loop = true;
+backgroundMusic.loop = true;          // ajusté selon le nombre de pistes
+backgroundMusic.preload = 'none';
+backgroundMusic.volume = audioConfig.musicVolume;
 
 const narrationAudio = new Audio();
 narrationAudio.loop = false;
+narrationAudio.preload = 'none';
+narrationAudio.volume = audioConfig.narrationVolume;
 
-// Fonction pour charger la liste des fichiers audio avec détection dynamique
-function initAudioLists() {
-  // Réinitialiser les listes audio
-  audioConfig.musicList = [];
-  audioConfig.narrationList = [];
+/* =============================================================================
+ *  MANIFESTE
+ * ========================================================================== */
 
-  // Liste des extensions de fichiers audio à rechercher
-  const audioExtensions = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'];
+/** Fabrique un chemin complet à partir d'une entrée du manifeste. */
+function _audioResolvePath(entry, folder) {
+  if (!entry) return null;
+  let name = null;
+  let info = null;
 
-  // Fonction pour lister tous les fichiers audio dans un dossier
-  async function scanAllAudioFiles(directory, callback) {
-    console.log(`Tentative de listage des fichiers dans ${directory}`);
-    
-    try {
-      // On utilise une requête fetch avec l'option directory pour récupérer la liste des fichiers
-      // Comme cette méthode n'est pas standardisée, nous allons tenter à la place de faire
-      // des requêtes individuelles pour chaque fichier potentiel
-      
-      // D'abord, créons une liste des combinaisons potentielles
-      const potentialFiles = [];
-      
-      // Approche 1: Vérifier tous les fichiers dans le dossier
-      const response = await fetch(`${directory}/`);
-      const dirListing = await response.text();
-      
-      // Extraire les noms de fichiers de la réponse HTML (si disponible)
-      const fileLinks = dirListing.match(/href="([^"]+\.(mp3|wav|ogg|m4a|aac|flac))"/gi);
-      
-      if (fileLinks && fileLinks.length > 0) {
-        // Extraire les noms de fichiers des liens
-        fileLinks.forEach(link => {
-          const fileName = link.match(/href="([^"]+)"/i)[1];
-          const filePath = `${directory}/${fileName}`;
-          potentialFiles.push(filePath);
-        });
-      } else {
-        console.log("Méthode de listage directorielle non disponible, essai d'une autre approche");
-        
-        // Approche 2: Vérifier tous les fichiers du dossier musique
-        for (let i = 0; i < 1000; i++) {
-          // Limiter la recherche aux 1000 premiers fichiers pour éviter une boucle infinie
-          const files = await listDirectoryFiles(directory);
-          if (files.length > 0) {
-            files.forEach(file => potentialFiles.push(file));
-            break;
-          }
-          
-          // Si aucun fichier n'est trouvé, test échoué, on utilise l'approche 3
-          if (i === 0) break;
-        }
-        
-        // Approche 3: Méthode simple - test direct pour chaque fichier
-        const filesFound = [];
-        
-        // Vérifier directement chaque fichier dans le dossier
-        const directoryContents = await fetch(`${directory}/`);
-        const text = await directoryContents.text();
-        
-        // Rechercher tous les liens dans la page qui ont des extensions audio
-        const regex = new RegExp(`href="([^"]+\\.(${audioExtensions.map(ext => ext.substring(1)).join('|')}))`, 'gi');
-        let match;
-        while ((match = regex.exec(text)) !== null) {
-          const fileName = match[1];
-          // Éviter les chemins absolus et les URLs externes
-          if (!fileName.includes('://') && !fileName.startsWith('/')) {
-            filesFound.push(`${directory}/${fileName}`);
-          }
-        }
-        
-        if (filesFound.length > 0) {
-          filesFound.forEach(file => potentialFiles.push(file));
-        } else {
-          // Approche 4: Si rien ne fonctionne, chercher tous les fichiers avec une extension spécifique
-          console.log("Aucun fichier audio trouvé avec les méthodes précédentes, tentative avec des noms génériques");
-          
-          // Liste de noms génériques à essayer
-          const baseNames = [
-            '', // Rechercher tout fichier *.mp3, etc.
-            'file', 'audio', 'sound', 'track', 'music', 'theme', 'narration', 'voice',
-            'rodrigo', 'Guillautine', // Noms existants connus
-            'intro', 'mission', 'background', 'menu', 'game'
-          ];
-          
-          // Essayer toutes les combinaisons possibles de noms de base et d'extensions
-          for (const baseName of baseNames) {
-            for (const ext of audioExtensions) {
-              potentialFiles.push(`${directory}/${baseName}${ext}`);
-              // Ajouter des variantes avec des numéros
-              for (let i = 1; i <= 10; i++) {
-                potentialFiles.push(`${directory}/${baseName}${i}${ext}`);
-              }
-            }
-          }
-        }
-      }
-      
-      // Maintenant, vérifier tous les fichiers potentiels
-      const verificationPromises = potentialFiles.map(async (file) => {
-        try {
-          const response = await fetch(file, { method: 'HEAD' });
-          if (response.ok) return file;
-          return null;
-        } catch (error) {
-          return null;
-        }
-      });
-      
-      const results = await Promise.all(verificationPromises);
-      const validFiles = results.filter(file => file !== null);
-      validFiles.forEach(file => callback(file));
-      
-      console.log(`Nombre de fichiers audio trouvés dans ${directory}: ${validFiles.length}`);
-      
-      // Si aucun fichier n'est trouvé, essayer avec les noms de fichiers existants connus
-      if (validFiles.length === 0) {
-        console.warn(`Aucun fichier audio trouvé dans ${directory} avec les méthodes automatiques`);
-        
-        // Dernière tentative avec les noms de fichiers connus
-        let knownFiles = [];
-        if (directory.includes('musique')) {
-          knownFiles = ['rodrigo.wav', 'theme1.mp3', 'theme2.mp3', 'theme3.mp3'];
-        } else if (directory.includes('narration')) {
-          knownFiles = ['Guillautine.mp3', 'intro1.mp3', 'intro2.mp3', 'mission1.mp3'];
-        }
-        
-        const knownVerificationPromises = knownFiles.map(async (fileName) => {
-          try {
-            const file = `${directory}/${fileName}`;
-            const response = await fetch(file, { method: 'HEAD' });
-            if (response.ok) return file;
-            return null;
-          } catch (error) {
-            return null;
-          }
-        });
-        
-        const knownResults = await Promise.all(knownVerificationPromises);
-        const validKnownFiles = knownResults.filter(file => file !== null);
-        validKnownFiles.forEach(file => callback(file));
-        
-        console.log(`Fichiers connus trouvés dans ${directory}: ${validKnownFiles.length}`);
-      }
-    } catch (error) {
-      console.error(`Erreur lors de la recherche de fichiers audio dans ${directory}:`, error);
-      
-      // Si une erreur se produit, essayer la méthode directe pour les fichiers de musique/narration courants
-      if (directory.includes('musique')) {
-        // Liste des fichiers à tester basée sur ce qu'on voit dans le dossier
-        const files = ['rodrigo.wav', 'UpNDown.mp3', 'StupidFlower.mp3', 'SwimingPool.mp3', 'NC.mp3', 'Honeypot.mp3'];
-        files.forEach(file => {
-          const filePath = `${directory}/${file}`;
-          fetch(filePath, { method: 'HEAD' })
-            .then(response => {
-              if (response.ok) callback(filePath);
-            })
-            .catch(() => {});
-        });
-      } else if (directory.includes('narration')) {
-        // Liste des fichiers à tester basée sur ce qu'on voit dans le dossier
-        const files = ['Guillautine.mp3'];
-        const elevenLabsFiles = [];
-        for (let i = 1; i <= 30; i++) {
-          elevenLabsFiles.push(`ElevenLabs_2024-08-17T${i < 10 ? '0' + i : i}_00_00_L'ile au fleur_ivc_s50_sb50_se0_b_m2.mp3`);
-        }
-        [...files, ...elevenLabsFiles].forEach(file => {
-          const filePath = `${directory}/${file}`;
-          fetch(filePath, { method: 'HEAD' })
-            .then(response => {
-              if (response.ok) callback(filePath);
-            })
-            .catch(() => {});
-        });
-      }
-    }
+  if (typeof entry === 'string') {
+    name = entry;
+  } else if (typeof entry === 'object') {
+    name = entry.fichier || entry.file || entry.src || entry.path ||
+           entry.chemin || entry.nom || entry.name || null;
+    info = entry;
   }
-  
-  // Fonction auxiliaire pour tenter de lister les fichiers du répertoire
-  async function listDirectoryFiles(directory) {
-    try {
-      const response = await fetch(`${directory}/`);
-      const text = await response.text();
-      
-      // Chercher tous les liens qui pourraient être des fichiers audio
-      const audioFileRegex = new RegExp(`href="([^"]+\\.(${audioExtensions.map(ext => ext.substring(1)).join('|')}))`, 'gi');
-      const files = [];
-      let match;
-      
-      while ((match = audioFileRegex.exec(text)) !== null) {
-        const fileName = match[1];
-        // Éviter les chemins absolus et les URLs externes
-        if (!fileName.includes('://') && !fileName.startsWith('/')) {
-          files.push(`${directory}/${fileName}`);
-        }
-      }
-      
-      return files;
-    } catch (error) {
-      console.warn("Impossible de lister les fichiers par la méthode directory", error);
-      return [];
-    }
-  }
-  
-  // Rechercher les fichiers audio dans les deux dossiers
-  scanAllAudioFiles('assets/audio/musique', file => {
-    console.log(`Fichier musique trouvé: ${file}`);
-    audioConfig.musicList.push(file);
-  });
-  
-  scanAllAudioFiles('assets/audio/narration', file => {
-    console.log(`Fichier narration trouvé: ${file}`);
-    audioConfig.narrationList.push(file);
-  });
-  
-  // Définir un délai plus long pour attendre que les recherches asynchrones se terminent
-  setTimeout(() => {
-    console.log("Vérification finale des fichiers audio détectés");
-    // Vérifier si des fichiers ont été trouvés et lister le résultat
-    if (audioConfig.musicList.length === 0) {
-      console.warn("⚠️ Aucun fichier de musique détecté - Vérifiez le dossier assets/audio/musique/");
-      // Essai avec hardcoding du nom de fichier si on n'a rien trouvé
-      audioConfig.musicList.push('assets/audio/musique/rodrigo.wav');
-    } else {
-      console.log(`✅ Fichiers musicaux détectés: ${audioConfig.musicList.length}`);
-      audioConfig.musicList.forEach((file, index) => {
-        console.log(`Musique ${index+1}: ${file}`);
-      });
-    }
-    
-    if (audioConfig.narrationList.length === 0) {
-      console.warn("⚠️ Aucun fichier de narration détecté - Vérifiez le dossier assets/audio/narration/");
-      // Essai avec hardcoding du nom de fichier si on n'a rien trouvé
-      audioConfig.narrationList.push('assets/audio/narration/Guillautine.mp3');
-    } else {
-      console.log(`✅ Fichiers de narration détectés: ${audioConfig.narrationList.length}`);
-      audioConfig.narrationList.forEach((file, index) => {
-        if (index < 10) { // Limiter l'affichage pour éviter de spammer la console
-          console.log(`Narration ${index+1}: ${file}`);
-        } else if (index === 10) {
-          console.log(`... et ${audioConfig.narrationList.length - 10} autres fichiers de narration`);
-        }
-      });
-    }
-    
-    // Signaler que les fichiers audio sont prêts
-    audioFilesReady = true;
-  }, 5000); // Augmenter le délai à 5 secondes pour s'assurer que toutes les requêtes ont le temps de se terminer
-}
+  if (!name) return null;
+  name = String(name).trim();
+  if (!name) return null;
 
-// Fonction plus simple pour vérifier si un fichier audio est jouable
-function isAudioFilePlayable(filePath) {
-  return new Promise((resolve) => {
-    fetch(filePath, { method: 'HEAD' })
-      .then(response => {
-        if (response.ok) {
-          const audio = new Audio();
-          audio.addEventListener('canplaythrough', () => {
-            resolve(true);
-          }, { once: true });
-          
-          audio.addEventListener('error', () => {
-            resolve(false);
-          }, { once: true });
-          
-          audio.src = filePath;
-          audio.load();
-          
-          // Définir un délai maximum pour la vérification
-          setTimeout(() => {
-            resolve(false);
-          }, 1000);
-        } else {
-          resolve(false);
-        }
-      })
-      .catch(() => resolve(false));
-  });
-}
+  // Chemin déjà complet (contient un dossier, une URL, ou part de la racine).
+  const isAbsolute = /^([a-z]+:)?\/\//i.test(name) || name.charAt(0) === '/' || name.indexOf('/') >= 0;
+  const dir = String(folder || '').replace(/\/*$/, '/');
+  const path = isAbsolute ? name : dir + name;
 
-// Fonction pour jouer une musique aléatoire avec meilleure gestion d'erreurs
-function playRandomMusic() {
-  if (!audioConfig.soundEnabled) {
-    console.log("Son désactivé, musique non jouée");
-    return;
-  }
-  
-  // Vérifier si les fichiers audio sont prêts et disponibles
-  if (!audioFilesReady) {
-    console.log("Les fichiers audio ne sont pas encore prêts, attente...");
-    setTimeout(playRandomMusic, 500);
-    return;
-  }
-  
-  if (audioConfig.musicList.length === 0) {
-    console.warn("Aucun fichier de musique disponible");
-    return;
-  }
-  
-  // Sélection de musique avec système de rotation équitable
-  let availableMusic = [];
-  
-  // Si toutes les musiques ont été jouées, réinitialiser la liste
-  if (audioConfig.playedMusicList.length >= audioConfig.musicList.length) {
-    console.log("Cycle de musiques terminé, réinitialisation");
-    audioConfig.playedMusicList = [];
-    // Garder la musique actuelle dans la liste des jouées pour éviter de la rejouer immédiatement
-    if (audioConfig.currentMusic) {
-      audioConfig.playedMusicList.push(audioConfig.currentMusic);
-    }
-  }
-  
-  // Filtrer les musiques non encore jouées dans ce cycle
-  availableMusic = audioConfig.musicList.filter(music => !audioConfig.playedMusicList.includes(music));
-  
-  // Si toutes les musiques ont été jouées (cas rare, potentiellement dû à des erreurs), réinitialiser
-  if (availableMusic.length === 0) {
-    console.log("Aucune musique disponible, réinitialisation de la liste");
-    audioConfig.playedMusicList = [];
-    // Mais toujours éviter de rejouer la musique actuelle
-    if (audioConfig.currentMusic) {
-      audioConfig.playedMusicList.push(audioConfig.currentMusic);
-      availableMusic = audioConfig.musicList.filter(music => music !== audioConfig.currentMusic);
-    } else {
-      availableMusic = audioConfig.musicList;
-    }
-  }
-  
-  const randomIndex = Math.floor(Math.random() * availableMusic.length);
-  const musicPath = availableMusic[randomIndex];
-  
-  console.log("Tentative de lecture de la musique:", musicPath);
-  
-  try {
-    backgroundMusic.src = musicPath;
-    
-    // S'assurer que le volume est correctement défini avant de jouer
-    backgroundMusic.volume = audioConfig.musicVolume;
-    console.log("Volume de musique appliqué:", audioConfig.musicVolume);
-    
-    backgroundMusic.onerror = function() {
-      console.warn(`Erreur lors du chargement de la musique: ${musicPath}`);
-      // Retirer ce fichier de la liste et essayer avec un autre
-      audioConfig.musicList = audioConfig.musicList.filter(m => m !== musicPath);
-      if (audioConfig.musicList.length > 0) {
-        setTimeout(playRandomMusic, 500);
-      }
+  if (info) {
+    audioConfig.trackInfo[path] = {
+      titre: info.titre || info.title || null,
+      gain: (typeof info.gain === 'number') ? _audioClamp01(info.gain) : 1
     };
-    
-    // Si les effets de fondu sont activés, commencer avec volume à 0
-    let targetVolume = audioConfig.musicVolume;
-    if (audioConfig.useFadeEffects) {
-      backgroundMusic.volume = 0;
-    }
-    
-    backgroundMusic.play()
-      .then(() => {
-        console.log("Musique démarrée avec succès:", musicPath);
-        audioConfig.currentMusic = musicPath;
-        
-        // Ajouter la musique à la liste des musiques jouées
-        if (!audioConfig.playedMusicList.includes(musicPath)) {
-          audioConfig.playedMusicList.push(musicPath);
-          console.log(`Musique ajoutée à la liste des musiques jouées. Jouées: ${audioConfig.playedMusicList.length}/${audioConfig.musicList.length}`);
-        }
-        
-        // Appliquer un fondu d'entrée si l'option est activée
-        if (audioConfig.useFadeEffects) {
-          let fadeInInterval = setInterval(() => {
-            backgroundMusic.volume = Math.min(targetVolume, backgroundMusic.volume + 0.05);
-            if (backgroundMusic.volume >= targetVolume) {
-              clearInterval(fadeInInterval);
-              console.log("Fondu d'entrée terminé, volume final:", backgroundMusic.volume);
-            }
-          }, 100);
-        }
-      })
-      .catch(e => {
-        console.warn("Erreur de lecture audio:", e);
-        if (e.name !== "NotAllowedError") {
-          // Si ce n'est pas dû à l'interaction utilisateur, essayer un autre fichier
-          audioConfig.musicList = audioConfig.musicList.filter(m => m !== musicPath);
-          if (audioConfig.musicList.length > 0) {
-            setTimeout(playRandomMusic, 500);
-          }
-        }
-      });
-  } catch (err) {
-    console.error("Impossible de lire la musique:", err);
   }
+  return path;
 }
 
-// Fonction pour jouer une narration aléatoire avec meilleure gestion d'erreurs
-function playRandomNarration(forceNew = false) {
-  if (!audioConfig.soundEnabled) {
-    console.log("Son désactivé, narration non jouée");
-    // Ajouter quand même les points de bonus
-    applyNarrationBonus();
-    return false; // Ne pas interrompre une narration en cours
+/** Extrait une liste de pistes d'une section du manifeste, quelle que soit sa forme. */
+function _audioReadSection(section, defaultFolder) {
+  if (!section) return [];
+  let list = null;
+  let folder = defaultFolder;
+
+  if (Array.isArray(section)) {
+    list = section;
+  } else if (typeof section === 'object') {
+    folder = section.dossier || section.folder || section.dir || defaultFolder;
+    list = section.pistes || section.tracks || section.files || section.fichiers ||
+           section.liste || section.list || null;
   }
-  
-  // Vérifier si les fichiers audio sont prêts et disponibles
-  if (!audioFilesReady) {
-    console.log("Les fichiers audio ne sont pas encore prêts, narration reportée...");
-    setTimeout(() => {
-      if (gameState === "playing") {
-        playRandomNarration(forceNew);
-      }
-    }, 1000);
-    return false; // Ne pas interrompre une narration en cours
+  if (!Array.isArray(list)) return [];
+
+  const out = [];
+  for (let i = 0; i < list.length; i++) {
+    const p = _audioResolvePath(list[i], folder);
+    if (p && out.indexOf(p) < 0) out.push(p);
   }
-  
-  if (audioConfig.narrationList.length === 0) {
-    console.warn("Aucun fichier de narration disponible");
-    // Ajouter quand même les points de bonus sans narration
-    applyNarrationBonus();
-    return false; // Ne pas interrompre une narration en cours
-  }
-  
-  // Ne pas démarrer une nouvelle narration si une est déjà en cours, sauf si forceNew = true
-  if (!forceNew && audioConfig.currentNarration && !narrationAudio.paused && !narrationAudio.ended) {
-    console.log("Une narration est déjà en cours, commande ignorée");
-    return false;
-  }
-  
-  // Si une narration est en cours mais qu'on force une nouvelle, arrêter la narration actuelle
-  if (forceNew && audioConfig.currentNarration && !narrationAudio.paused) {
-    console.log("Interruption de la narration en cours pour en jouer une nouvelle");
-    narrationAudio.pause();
-    // Restaurer le volume de musique si nécessaire
-    if (backgroundMusic.played.length > 0 && !backgroundMusic.paused && audioConfig.autoAdjustVolume) {
-      backgroundMusic.volume = audioConfig.originalMusicVolume;
-    }
-  }
-  
-  // Sélection de narration avec système de rotation équitable
-  let availableNarrations = [];
-  
-  // Si toutes les narrations ont été jouées, réinitialiser la liste
-  if (audioConfig.playedNarrationList.length >= audioConfig.narrationList.length) {
-    console.log("Cycle de narrations terminé, réinitialisation");
-    audioConfig.playedNarrationList = [];
-    // Garder la narration actuelle dans la liste des jouées pour éviter de la rejouer immédiatement
-    if (audioConfig.currentNarration) {
-      audioConfig.playedNarrationList.push(audioConfig.currentNarration);
-    }
-  }
-  
-  // Filtrer les narrations non encore jouées dans ce cycle
-  availableNarrations = audioConfig.narrationList.filter(narration => !audioConfig.playedNarrationList.includes(narration));
-  
-  // Si toutes les narrations ont été jouées (cas rare), réinitialiser
-  if (availableNarrations.length === 0) {
-    console.log("Aucune narration disponible, réinitialisation de la liste");
-    audioConfig.playedNarrationList = [];
-    // Mais toujours éviter de rejouer la narration actuelle
-    if (audioConfig.currentNarration) {
-      audioConfig.playedNarrationList.push(audioConfig.currentNarration);
-      availableNarrations = audioConfig.narrationList.filter(narration => narration !== audioConfig.currentNarration);
-    } else {
-      availableNarrations = audioConfig.narrationList;
-    }
-  }
-  
-  const randomIndex = Math.floor(Math.random() * availableNarrations.length);
-  const narrationPath = availableNarrations[randomIndex];
-  
-  console.log("Tentative de lecture de la narration:", narrationPath);
-  
-  try {
-    // Baisser le volume de la musique pendant la narration si la musique joue et si l'option est activée
-    if (backgroundMusic.played.length > 0 && !backgroundMusic.paused && audioConfig.autoAdjustVolume) {
-      audioConfig.originalMusicVolume = backgroundMusic.volume;
-      backgroundMusic.volume = audioConfig.originalMusicVolume * 0.3; // Réduire à 30%
-    }
-    
-    narrationAudio.src = narrationPath;
-    narrationAudio.volume = audioConfig.narrationVolume;
-    
-    narrationAudio.onerror = function() {
-      console.warn(`Erreur lors du chargement de la narration: ${narrationPath}`);
-      // Restaurer le volume de musique si l'option est activée
-      if (backgroundMusic.played.length > 0 && !backgroundMusic.paused && audioConfig.autoAdjustVolume) {
-        backgroundMusic.volume = audioConfig.originalMusicVolume;
-      }
-      
-      // Retirer ce fichier de la liste et essayer avec un autre
-      audioConfig.narrationList = audioConfig.narrationList.filter(n => n !== narrationPath);
-      if (audioConfig.narrationList.length > 0 && gameState === "playing") {
-        setTimeout(() => playRandomNarration(forceNew), 500);
-      } else {
-        applyNarrationBonus();
-      }
-    };
-    
-    // Événement de fin pour restaurer le volume de musique et donner les points
-    narrationAudio.onended = function() {
-      // Restaurer le volume de musique si l'option est activée
-      if (backgroundMusic.played.length > 0 && !backgroundMusic.paused && audioConfig.autoAdjustVolume) {
-        backgroundMusic.volume = audioConfig.originalMusicVolume;
-      }
-      
-      // Donner des points au joueur
-      applyNarrationBonus("Bonus Narration");
-      
-      audioConfig.currentNarration = null;
-    };
-    
-    narrationAudio.play()
-      .then(() => {
-        console.log("Narration démarrée avec succès:", narrationPath);
-        audioConfig.currentNarration = narrationPath;
-        
-        // Ajouter la narration à la liste des narrations jouées
-        if (!audioConfig.playedNarrationList.includes(narrationPath)) {
-          audioConfig.playedNarrationList.push(narrationPath);
-          console.log(`Narration ajoutée à la liste des narrations jouées. Jouées: ${audioConfig.playedNarrationList.length}/${audioConfig.narrationList.length}`);
-        }
-      })
-      .catch(e => {
-        console.warn("Erreur de lecture narration:", e);
-        // Restaurer le volume de musique si l'option est activée
-        if (backgroundMusic.played.length > 0 && !backgroundMusic.paused && audioConfig.autoAdjustVolume) {
-          backgroundMusic.volume = audioConfig.originalMusicVolume;
-        }
-        
-        if (e.name !== "NotAllowedError") {
-          // Si ce n'est pas dû à l'interaction utilisateur, essayer un autre fichier
-          audioConfig.narrationList = audioConfig.narrationList.filter(n => n !== narrationPath);
-          if (audioConfig.narrationList.length > 0 && gameState === "playing") {
-            setTimeout(() => playRandomNarration(forceNew), 500);
-          } else {
-            applyNarrationBonus();
-          }
-        }
-      });
-  } catch (err) {
-    console.error("Impossible de lire la narration:", err);
-    // En cas d'erreur, restaurer le volume de la musique si l'option est activée
-    if (backgroundMusic.played.length > 0 && !backgroundMusic.paused && audioConfig.autoAdjustVolume) {
-      backgroundMusic.volume = audioConfig.originalMusicVolume;
-    }
-    
-    // Ajouter quand même les points de bonus sans narration
-    applyNarrationBonus();
-  }
-  return true; // Une narration a été lancée
+  return out;
 }
 
-// Fonction pour déclencher une narration aléatoire
-function triggerRandomNarration() {
-  // La touche N force toujours une nouvelle narration, même si une est déjà en cours
-  const forceNewNarration = true;
-  
-  // Si on force une nouvelle narration, toujours retourner true pour afficher la notification
-  if (forceNewNarration) {
-    // Lancer la lecture d'une nouvelle narration en forçant son changement
-    return playRandomNarration(forceNewNarration);
-  } else {
-    // Comportement classique: vérifier si une narration est déjà en cours
-    if (audioConfig.currentNarration && !narrationAudio.paused && !narrationAudio.ended) {
-      console.log("Une narration est déjà en cours, attente...");
+/**
+ * Charge assets/audio/manifest.json. UNE seule requête.
+ * En cas d'absence (ou d'ouverture en file://), on n'émet AUCUNE erreur :
+ * le jeu tourne parfaitement sans la moindre piste grâce à la nappe procédurale.
+ */
+function loadAudioManifest() {
+  audioConfig.manifestError = null;
+
+  if (typeof fetch !== 'function') {
+    audioConfig.manifestLoaded = true;
+    return Promise.resolve(false);
+  }
+
+  return fetch(audioConfig.manifestUrl, { cache: 'no-cache' })
+    .then(function (response) {
+      if (!response.ok) throw new Error('HTTP ' + response.status);
+      return response.json();
+    })
+    .then(function (data) {
+      const musique = _audioReadSection(
+        data.musique || data.music || data.musiques,
+        'assets/audio/musique/');
+      const narration = _audioReadSection(
+        data.narration || data.narrations || data.voix || data.voice,
+        'assets/audio/narration/');
+
+      audioConfig.musicList = musique;
+      audioConfig.narrationList = narration;
+      audioConfig.playedMusicList = [];
+      audioConfig.playedNarrationList = [];
+      audioConfig.manifestLoaded = true;
+
+      // Plusieurs pistes -> vraie playlist (enchaînement), sinon boucle.
+      backgroundMusic.loop = (musique.length <= 1);
+
+      console.log('[audio] manifeste chargé : ' + musique.length + ' piste(s) de musique, ' +
+                  narration.length + ' narration(s).');
+      if (musique.length === 0) {
+        console.log('[audio] aucune piste : la nappe procédurale prend le relais. ' +
+                    'Pour ajouter vos musiques, déposez-les dans assets/audio/musique/ ' +
+                    'et listez-les dans ' + audioConfig.manifestUrl + '.');
+      }
+      return true;
+    })
+    .catch(function (err) {
+      audioConfig.manifestLoaded = true;
+      audioConfig.manifestError = String(err && err.message ? err.message : err);
+      // Pas de manifeste = aucune piste connue. On vide les listes plutôt que
+      // de garder d'anciennes entrées qui produiraient des erreurs de lecture.
+      audioConfig.musicList = [];
+      audioConfig.narrationList = [];
+      audioConfig.playedMusicList = [];
+      audioConfig.playedNarrationList = [];
+      backgroundMusic.loop = true;
+      // Volontairement en console.log : ce n'est PAS une anomalie, le jeu est
+      // parfaitement jouable sans manifeste.
+      console.log('[audio] pas de manifeste exploitable (' + audioConfig.manifestError +
+                  ') — bruitages procéduraux uniquement.');
       return false;
+    });
+}
+
+/* =============================================================================
+ *  PONT VERS LE MOTEUR DE BRUITAGES
+ * ========================================================================== */
+
+function _sfx() {
+  return (typeof SFX !== 'undefined' && SFX) ? SFX : null;
+}
+
+/** Pousse les réglages des curseurs vers les bus du moteur audio. */
+function applyAudioSettings() {
+  const s = _sfx();
+  if (!s) return;
+  try {
+    s.setEnabled(audioConfig.soundEnabled);
+    s.setSfxVolume(audioConfig.sfxVolume);
+    s.setMusicVolume(audioConfig.musicVolume);
+    s.setBedEnabled(audioConfig.proceduralMusic);
+  } catch (e) { /* jamais bloquant */ }
+}
+
+/** Reprend le contexte audio (à appeler depuis un geste utilisateur). */
+function unlockAudioContext() {
+  const s = _sfx();
+  if (!s) return false;
+  let ok = false;
+  try { ok = s.unlock(); } catch (e) { ok = false; }
+  applyAudioSettings();
+  return ok;
+}
+
+/** Route un élément <audio> dans le graphe Web Audio (ducking + limiteur). */
+function _routeElement(el, kind) {
+  if (!audioConfig.routeThroughWebAudio) return false;
+  const s = _sfx();
+  if (!s || !s.isReady || !s.isReady()) return false;
+  try {
+    return kind === 'voice' ? s.routeVoice(el) : s.routeMusic(el);
+  } catch (e) { return false; }
+}
+
+/* =============================================================================
+ *  FONDUS DE MUSIQUE
+ *  Un SEUL fondu peut être actif : l'ancien code empilait des setInterval qui
+ *  se battaient entre eux et laissaient régulièrement le volume bloqué à 0.
+ * ========================================================================== */
+let _musicFadeTimer = null;
+
+function _setMusicElementVolume(v) {
+  try { backgroundMusic.volume = _audioClamp01(v); } catch (e) { /* ignoré */ }
+}
+
+function _cancelMusicFade() {
+  if (_musicFadeTimer) { clearInterval(_musicFadeTimer); _musicFadeTimer = null; }
+}
+
+/** Fondu du volume de la musique vers `target` en `ms`, puis `done()`. */
+function fadeMusicTo(target, ms, done) {
+  _cancelMusicFade();
+  target = _audioClamp01(target);
+  if (!audioConfig.useFadeEffects || !(ms > 0)) {
+    _setMusicElementVolume(target);
+    if (done) done();
+    return;
+  }
+  const from = _audioClamp01(backgroundMusic.volume);
+  if (Math.abs(from - target) < 0.005) {
+    _setMusicElementVolume(target);
+    if (done) done();
+    return;
+  }
+  const t0 = _audioNow();
+  _musicFadeTimer = setInterval(function () {
+    const k = Math.min(1, (_audioNow() - t0) / ms);
+    _setMusicElementVolume(from + (target - from) * k);
+    if (k >= 1) {
+      _cancelMusicFade();
+      if (done) done();
     }
-    
-    return playRandomNarration(false);
+  }, 33);
+}
+
+/* =============================================================================
+ *  LECTEUR DE MUSIQUE
+ * ========================================================================== */
+let _musicRetries = 0;
+
+/** Volume cible d'une piste (curseur × gain déclaré dans le manifeste). */
+function _targetMusicVolume(path) {
+  const info = path ? audioConfig.trackInfo[path] : null;
+  const gain = (info && typeof info.gain === 'number') ? info.gain : 1;
+  return _audioClamp01(audioConfig.musicVolume * gain);
+}
+
+/** Retire une piste défaillante de la liste (elle ne sera plus jamais tentée). */
+function _dropTrack(path) {
+  audioConfig.musicList = audioConfig.musicList.filter(function (m) { return m !== path; });
+  audioConfig.playedMusicList = audioConfig.playedMusicList.filter(function (m) { return m !== path; });
+  if (audioConfig.currentMusic === path) audioConfig.currentMusic = null;
+  backgroundMusic.loop = (audioConfig.musicList.length <= 1);
+}
+
+/** Choisit une piste non encore jouée dans le cycle courant (rotation équitable). */
+function _pickNextTrack(exclude) {
+  const all = audioConfig.musicList;
+  if (all.length === 0) return null;
+  if (all.length === 1) return all[0];
+
+  let pool = all.filter(function (m) {
+    return audioConfig.playedMusicList.indexOf(m) < 0 && m !== exclude;
+  });
+  if (pool.length === 0) {
+    // Cycle terminé : on repart, en évitant simplement de répéter la piste courante.
+    audioConfig.playedMusicList = [];
+    pool = all.filter(function (m) { return m !== exclude; });
+    if (pool.length === 0) pool = all;
+  }
+  return pool[(Math.random() * pool.length) | 0];
+}
+
+function _markPlayed(path) {
+  if (path && audioConfig.playedMusicList.indexOf(path) < 0) {
+    audioConfig.playedMusicList.push(path);
   }
 }
 
-// Fonction utilitaire pour appliquer le bonus de narration
-function applyNarrationBonus(message = "Bonus") {
-  score += audioConfig.narrationPoints;
-  scorePopups.push({
-    x: CANVAS_WIDTH / 2,
-    y: CANVAS_HEIGHT / 2 - 50,
-    points: audioConfig.narrationPoints,
-    text: `${message}: +${audioConfig.narrationPoints}`,
-    lifetime: 2.0,
-    dy: -1,
-    color: '#00ffff'
-  });
+// Jeton de lecture : identifie la demande de lecture courante. Sert à ignorer
+// les rappels tardifs d'une piste qui a déjà été remplacée.
+let _musicToken = 0;
+
+/** Démarre une piste précise. `fadeIn` = fondu d'entrée. */
+function _startTrack(path, fadeIn) {
+  if (!path) return false;
+  _cancelMusicFade();
+  _musicToken++;
+  const token = _musicToken;
+
+  const target = _targetMusicVolume(path);
+  try {
+    backgroundMusic.pause();
+    backgroundMusic.src = path;
+    backgroundMusic.preload = 'auto';
+    backgroundMusic.currentTime = 0;
+  } catch (e) { /* certains navigateurs râlent sur currentTime avant chargement */ }
+
+  _setMusicElementVolume(fadeIn && audioConfig.useFadeEffects ? 0 : target);
+  _routeElement(backgroundMusic, 'music');
+
+  const p = backgroundMusic.play();
+  if (p && p.then) {
+    p.then(function () {
+      _musicRetries = 0;
+      audioConfig.currentMusic = path;
+      _markPlayed(path);
+      if (fadeIn && audioConfig.useFadeEffects) fadeMusicTo(target, audioConfig.musicFadeMs);
+    }).catch(function (err) {
+      if (err && err.name === 'NotAllowedError') {
+        // Pas encore de geste utilisateur : on réessaiera au déverrouillage.
+        audioConfig.currentMusic = null;
+        return;
+      }
+      console.warn('[audio] lecture impossible : ' + path, err && err.name);
+      _dropTrack(path);
+      if (_musicRetries++ < 3) playRandomMusic();
+    });
+  } else {
+    audioConfig.currentMusic = path;
+    _markPlayed(path);
+  }
+
+  // FILET DE SÉCURITÉ. Le fondu d'entrée est déclenché par la promesse de
+  // play(). Si un navigateur ne la tient jamais alors que la lecture a bien
+  // démarré, la musique resterait muette pour toujours (volume figé à 0).
+  // On vérifie donc une fois, après la durée du fondu, que le volume est
+  // bien remonté — et on le remonte sinon.
+  if (fadeIn && audioConfig.useFadeEffects) {
+    setTimeout(function () {
+      if (token !== _musicToken) return;      // une autre piste a pris la main
+      if (_musicFadeTimer) return;            // un fondu est déjà en cours
+      if (backgroundMusic.paused) return;     // rien ne joue : rien à corriger
+      const t = _targetMusicVolume(path);
+      if (t > 0.01 && backgroundMusic.volume < t * 0.05) {
+        audioConfig.currentMusic = path;
+        _markPlayed(path);
+        fadeMusicTo(t, 220);
+      }
+    }, audioConfig.musicFadeMs + 500);
+  }
+  return true;
 }
 
-// Fonctions pour mettre à jour les volumes
+/** Joue une piste aléatoire. Retourne false si aucune piste n'est disponible. */
+function playRandomMusic() {
+  if (!audioConfig.soundEnabled) return false;
+  if (audioConfig.musicList.length === 0) return false;  // la nappe procédurale assure
+  const path = _pickNextTrack(null);
+  if (!path) return false;
+  return _startTrack(path, true);
+}
+
+/** Passe à une autre piste, avec fondu de sortie puis fondu d'entrée. */
+function changeRandomMusic() {
+  if (!audioConfig.soundEnabled) return false;
+  if (audioConfig.musicList.length === 0) return false;
+
+  const next = _pickNextTrack(audioConfig.currentMusic);
+  if (!next || next === audioConfig.currentMusic) return false;
+
+  if (backgroundMusic.paused || !audioConfig.currentMusic) {
+    return _startTrack(next, true);
+  }
+  fadeMusicTo(0, audioConfig.musicFadeMs, function () {
+    _startTrack(next, true);
+  });
+  return true;
+}
+
+/** Arrête la musique (avec fondu si demandé). */
+function stopMusic(fade) {
+  if (fade && audioConfig.useFadeEffects) {
+    fadeMusicTo(0, audioConfig.musicFadeMs, function () {
+      try { backgroundMusic.pause(); } catch (e) { /* ignoré */ }
+    });
+  } else {
+    _cancelMusicFade();
+    try { backgroundMusic.pause(); } catch (e) { /* ignoré */ }
+  }
+}
+
+// Enchaînement de playlist : quand une piste se termine (loop = false parce
+// qu'il y a plusieurs pistes), on passe à la suivante.
+backgroundMusic.addEventListener('ended', function () {
+  if (!audioConfig.soundEnabled) return;
+  if (audioConfig.musicList.length > 1) playRandomMusic();
+});
+
+backgroundMusic.addEventListener('error', function () {
+  const path = audioConfig.currentMusic;
+  if (!path) return;
+  console.warn('[audio] piste illisible, retirée de la liste : ' + path);
+  _dropTrack(path);
+  if (_musicRetries++ < 3) playRandomMusic();
+});
+
+/* =============================================================================
+ *  NARRATION
+ * ========================================================================== */
+let _narrationDucking = false;
+
+function _duckMusicForNarration() {
+  if (!audioConfig.autoAdjustVolume) return;
+  if (_narrationDucking) return;
+  if (backgroundMusic.paused || !audioConfig.currentMusic) return;
+  _narrationDucking = true;
+  // On mémorise le volume CIBLE, jamais le volume instantané : c'est ce qui
+  // laissait la musique bloquée à 0 quand une narration démarrait pendant un fondu.
+  audioConfig.originalMusicVolume = _targetMusicVolume(audioConfig.currentMusic);
+  fadeMusicTo(audioConfig.originalMusicVolume * 0.25, 260);
+}
+
+function _restoreMusicAfterNarration() {
+  if (!_narrationDucking) return;
+  _narrationDucking = false;
+  fadeMusicTo(_targetMusicVolume(audioConfig.currentMusic), 420);
+}
+
+function _pickNextNarration(exclude) {
+  const all = audioConfig.narrationList;
+  if (all.length === 0) return null;
+  if (all.length === 1) return all[0];
+
+  let pool = all.filter(function (n) {
+    return audioConfig.playedNarrationList.indexOf(n) < 0 && n !== exclude;
+  });
+  if (pool.length === 0) {
+    audioConfig.playedNarrationList = [];
+    pool = all.filter(function (n) { return n !== exclude; });
+    if (pool.length === 0) pool = all;
+  }
+  return pool[(Math.random() * pool.length) | 0];
+}
+
+/**
+ * Joue une narration aléatoire.
+ * @returns {boolean} true SEULEMENT si une narration a réellement été lancée.
+ *   (input.js n'affiche sa notification que dans ce cas : plus de « Narration
+ *    déclenchée » mensonger quand il n'y a aucun fichier.)
+ */
+function playRandomNarration(forceNew) {
+  if (!audioConfig.soundEnabled) return false;
+  if (audioConfig.narrationList.length === 0) return false;
+
+  const busy = audioConfig.currentNarration && !narrationAudio.paused && !narrationAudio.ended;
+  if (busy && !forceNew) return false;
+
+  if (busy && forceNew) {
+    try { narrationAudio.pause(); } catch (e) { /* ignoré */ }
+  }
+
+  const path = _pickNextNarration(audioConfig.currentNarration);
+  if (!path) return false;
+
+  _duckMusicForNarration();
+
+  try {
+    narrationAudio.src = path;
+    narrationAudio.currentTime = 0;
+  } catch (e) { /* ignoré */ }
+  try { narrationAudio.volume = _audioClamp01(audioConfig.narrationVolume); } catch (e) { /* ignoré */ }
+  _routeElement(narrationAudio, 'voice');
+
+  const p = narrationAudio.play();
+  if (p && p.then) {
+    p.then(function () {
+      audioConfig.currentNarration = path;
+      if (audioConfig.playedNarrationList.indexOf(path) < 0) {
+        audioConfig.playedNarrationList.push(path);
+      }
+    }).catch(function (err) {
+      _restoreMusicAfterNarration();
+      audioConfig.currentNarration = null;
+      if (err && err.name !== 'NotAllowedError') {
+        console.warn('[audio] narration illisible, retirée de la liste : ' + path);
+        audioConfig.narrationList = audioConfig.narrationList.filter(function (n) { return n !== path; });
+      }
+      // AUCUN bonus ici : un échec ne rapporte rien (ancien bug de score infini).
+    });
+  } else {
+    audioConfig.currentNarration = path;
+  }
+  return true;
+}
+
+narrationAudio.addEventListener('ended', function () {
+  _restoreMusicAfterNarration();
+  // SEUL endroit où le bonus est accordé : la narration a été écoutée en entier.
+  applyNarrationBonus('Bonus Narration');
+  audioConfig.currentNarration = null;
+});
+
+narrationAudio.addEventListener('error', function () {
+  _restoreMusicAfterNarration();
+  const path = audioConfig.currentNarration;
+  audioConfig.currentNarration = null;
+  if (path) {
+    console.warn('[audio] narration illisible, retirée de la liste : ' + path);
+    audioConfig.narrationList = audioConfig.narrationList.filter(function (n) { return n !== path; });
+  }
+});
+
+/** Déclenche une narration (touche N). Retourne true si une narration est partie. */
+function triggerRandomNarration() {
+  return playRandomNarration(true);
+}
+
+/* -----------------------------------------------------------------------------
+ *  BONUS DE NARRATION
+ *  ⚠ CORRECTION DE BUG : l'ancienne version appelait cette fonction sur CHAQUE
+ *  chemin d'échec (son désactivé, liste vide, fichier illisible, exception…).
+ *  Résultat : maintenir la touche N rapportait +100 points par pression, sans
+ *  qu'aucun son ne soit joué. Le bonus est désormais réservé à une narration
+ *  réellement écoutée jusqu'au bout, et protégé par un délai de garde.
+ * -------------------------------------------------------------------------- */
+let _lastNarrationBonusAt = -1e9;
+
+function applyNarrationBonus(message) {
+  if (typeof gameState !== 'undefined' && gameState !== 'playing') return false;
+
+  const t = _audioNow();
+  if (t - _lastNarrationBonusAt < 5000) return false;   // anti-abus
+  _lastNarrationBonusAt = t;
+
+  const points = audioConfig.narrationPoints;
+  try {
+    if (typeof score === 'number') score += points;
+  } catch (e) { return false; }
+
+  try {
+    if (typeof scorePopups !== 'undefined' && scorePopups) {
+      scorePopups.push({
+        x: CANVAS_WIDTH / 2,
+        y: CANVAS_HEIGHT / 2 - 50,
+        points: points,
+        basePoints: points,
+        multiplier: 1,
+        text: (message || 'Bonus') + ': +' + points,
+        lifetime: 2.0,
+        dy: -1,
+        color: (typeof PALETTE !== 'undefined' && PALETTE.ui) ? PALETTE.ui.combo : '#ffd166'
+      });
+    }
+  } catch (e) { /* purement cosmétique */ }
+  return true;
+}
+
+/* =============================================================================
+ *  RÉGLAGES (curseurs de index.html, câblés par input.js)
+ * ========================================================================== */
+function _setLabel(id, value) {
+  try {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value + '%';
+  } catch (e) { /* ignoré */ }
+}
+
 function updateMusicVolume(value) {
-  const volume = value / 100;
+  const volume = _audioClamp01(Number(value) / 100);
   audioConfig.musicVolume = volume;
-  backgroundMusic.volume = volume;
-  localStorage.setItem('musicVolume', volume);
-  document.getElementById('musicVolumeValue').textContent = `${value}%`;
+  _cancelMusicFade();                       // un réglage manuel gagne sur un fondu
+  _setMusicElementVolume(_narrationDucking ? volume * 0.25 : _targetMusicVolume(audioConfig.currentMusic));
+  _audioPersist('musicVolume', volume);
+  _setLabel('musicVolumeValue', Math.round(volume * 100));
+  const s = _sfx();
+  if (s) { try { s.setMusicVolume(volume); } catch (e) { /* ignoré */ } }
 }
 
 function updateNarrationVolume(value) {
-  const volume = value / 100;
+  const volume = _audioClamp01(Number(value) / 100);
   audioConfig.narrationVolume = volume;
-  narrationAudio.volume = volume;
-  localStorage.setItem('narrationVolume', volume);
-  document.getElementById('narrationVolumeValue').textContent = `${value}%`;
+  try { narrationAudio.volume = volume; } catch (e) { /* ignoré */ }
+  _audioPersist('narrationVolume', volume);
+  _setLabel('narrationVolumeValue', Math.round(volume * 100));
 }
+
+/** ⚠ Ce curseur ne pilotait RIEN avant : il est maintenant branché sur le bus
+ *  des bruitages du moteur procédural. */
+let _lastSfxPreviewAt = -1e9;
 
 function updateSFXVolume(value) {
-  const volume = value / 100;
+  const volume = _audioClamp01(Number(value) / 100);
   audioConfig.sfxVolume = volume;
-  localStorage.setItem('sfxVolume', volume);
-  document.getElementById('sfxVolumeValue').textContent = `${value}%`;
-}
-
-// Fonction pour basculer l'affichage des contrôles audio
-function toggleAudioControls() {
-  const controls = document.getElementById('volumeControls');
-  if (controls.style.display === 'block') {
-    controls.style.display = 'none';
-  } else {
-    controls.style.display = 'block';
-  }
-}
-
-// Fonction pour activer le son du jeu
-function enableGameAudio() {
-  // Vérifier si les fichiers audio sont prêts
-  if (!audioFilesReady) {
-    console.log("Les fichiers audio ne sont pas encore prêts, activation reportée...");
-    setTimeout(enableGameAudio, 500);
-    return;
-  }
-  
-  // Vérifier si nous avons des fichiers audio
-  if (audioConfig.musicList.length === 0 && audioConfig.narrationList.length === 0) {
-    console.warn("Aucun fichier audio détecté, impossible d'activer le son");
-    alert("Aucun fichier audio trouvé dans les dossiers assets/audio/musique et assets/audio/narration.");
-    return;
-  }
-  
-  // Créer un contexte audio pour débloquer tous les sons
-  const unlockAudio = () => {
-    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-    // Un bref son silencieux pour débloquer l'audio
-    const oscillator = audioContext.createOscillator();
-    const gainNode = audioContext.createGain();
-    gainNode.gain.setValueAtTime(0, audioContext.currentTime); // Silence
-    oscillator.connect(gainNode);
-    gainNode.connect(audioContext.destination);
-    oscillator.start(0);
-    oscillator.stop(0.001);
-    
-    // Activer l'audio du jeu
-    audioConfig.soundEnabled = true;
-    localStorage.setItem('soundEnabled', 'true');
-    
-    // S'assurer que les volumes sont correctement initialisés avant de jouer la musique
-    backgroundMusic.volume = audioConfig.musicVolume;
-    narrationAudio.volume = audioConfig.narrationVolume;
-    
-    // Affichage de débogage des valeurs de volume
-    console.log("Volume de musique initialisé à:", audioConfig.musicVolume);
-    console.log("Volume de narration initialisé à:", audioConfig.narrationVolume);
-    console.log("Volume d'effets sonores initialisé à:", audioConfig.sfxVolume);
-    
-    // Jouer la musique de fond avec un léger délai pour être sûr
-    setTimeout(() => {
-      if (audioConfig.musicList.length > 0) {
-        playRandomMusic();
+  _audioPersist('sfxVolume', volume);
+  _setLabel('sfxVolumeValue', Math.round(volume * 100));
+  const s = _sfx();
+  if (s) {
+    try {
+      s.setSfxVolume(volume);
+      // Retour immédiat : on ENTEND ce qu'on règle en bougeant le curseur.
+      // (espacé de 140 ms, sinon un glissé de curseur mitraille des clics)
+      const t = _audioNow();
+      if (volume > 0 && t - _lastSfxPreviewAt > 140 && s.isUnlocked && s.isUnlocked()) {
+        _lastSfxPreviewAt = t;
+        s.play('enemyHit', { type: 'normal' });
       }
-    }, 100);
-    
-    // Enlever l'écouteur d'événement une fois utilisé
-    document.removeEventListener('click', unlockAudio);
-  };
-  
-  // Certains navigateurs nécessitent une interaction utilisateur pour jouer l'audio
-  document.addEventListener('click', unlockAudio, { once: true });
-  
-  // Simuler un clic pour essayer immédiatement
-  unlockAudio();
+    } catch (e) { /* ignoré */ }
+  }
 }
 
-// Fonction pour changer la musique actuelle par une autre aléatoire
-function changeRandomMusic() {
-  if (!audioConfig.soundEnabled) {
-    console.log("Son désactivé, changement de musique non effectué");
-    return;
+function toggleAudioControls() {
+  try {
+    const controls = document.getElementById('volumeControls');
+    if (!controls) return;
+    const visible = controls.style.display === 'block';
+    controls.style.display = visible ? 'none' : 'block';
+  } catch (e) { /* ignoré */ }
+}
+
+/* =============================================================================
+ *  ACTIVATION DU SON
+ * ========================================================================== */
+/**
+ * Active le son du jeu. Appelée par le bouton du menu (input.js) et par le
+ * premier geste utilisateur. Plus aucune alerte bloquante : l'absence de piste
+ * n'est pas une erreur, la nappe procédurale prend le relais.
+ */
+function enableGameAudio() {
+  audioConfig.soundEnabled = true;
+  _audioPersist('soundEnabled', 'true');
+
+  unlockAudioContext();
+
+  try { backgroundMusic.volume = _targetMusicVolume(audioConfig.currentMusic); } catch (e) { /* ignoré */ }
+  try { narrationAudio.volume = audioConfig.narrationVolume; } catch (e) { /* ignoré */ }
+
+  if (audioConfig.musicList.length > 0 && (backgroundMusic.paused || !audioConfig.currentMusic)) {
+    playRandomMusic();
   }
-  
-  if (audioConfig.musicList.length <= 1) {
-    console.log("Impossible de changer de musique - Une seule musique disponible");
-    return;
-  }
-  
-  // Filtrer la liste pour exclure la musique actuelle
-  const availableMusic = audioConfig.musicList.filter(music => music !== audioConfig.currentMusic);
-  
-  if (availableMusic.length === 0) {
-    console.log("Pas d'autre musique disponible");
-    return;
-  }
-  
-  // Choisir une nouvelle musique aléatoire
-  const randomIndex = Math.floor(Math.random() * availableMusic.length);
-  const newMusicPath = availableMusic[randomIndex];
-  
-  console.log("Changement de musique vers:", newMusicPath);
-  
-  // Sauvegarder le volume actuel
-  const currentVolume = audioConfig.musicVolume;
-  
-  // Vérifier si le volume était à zéro alors qu'il ne devrait pas l'être
-  if (backgroundMusic.volume === 0 && currentVolume > 0) {
-    console.log("Correction du volume à zéro lors du changement de musique");
-    backgroundMusic.volume = currentVolume;
-  }
-  
-  // Si l'option de fondu est désactivée, changer la musique immédiatement
-  if (!audioConfig.useFadeEffects) {
-    backgroundMusic.src = newMusicPath;
-    backgroundMusic.volume = currentVolume; // Maintenir le volume actuel
-    backgroundMusic.play()
-      .then(() => {
-        console.log("Nouvelle musique démarrée avec succès (sans fondu)");
-        audioConfig.currentMusic = newMusicPath;
-      })
-      .catch(e => {
-        console.warn("Erreur lors du changement de musique:", e);
-        // Essayer avec une autre musique en cas d'échec
-        audioConfig.musicList = audioConfig.musicList.filter(m => m !== newMusicPath);
-        if (audioConfig.musicList.length > 0) {
-          setTimeout(changeRandomMusic, 500);
-        }
-      });
-    return;
-  }
-  
-  // Si l'option de fondu est activée, utiliser la transition
-  // Fondu de sortie
-  let fadeOutInterval = setInterval(() => {
-    backgroundMusic.volume = Math.max(0, backgroundMusic.volume - 0.1);
-    if (backgroundMusic.volume <= 0) {
-      clearInterval(fadeOutInterval);
-      
-      // Charger et jouer la nouvelle musique
-      backgroundMusic.src = newMusicPath;
-      backgroundMusic.volume = 0; // Commencer à 0 pour le fondu d'entrée
-      backgroundMusic.play()
-        .then(() => {
-          console.log("Nouvelle musique démarrée avec succès (avec fondu)");
-          audioConfig.currentMusic = newMusicPath;
-          
-          // Fondu d'entrée
-          let fadeInInterval = setInterval(() => {
-            backgroundMusic.volume = Math.min(currentVolume, backgroundMusic.volume + 0.1);
-            if (backgroundMusic.volume >= currentVolume) {
-              clearInterval(fadeInInterval);
-            }
-          }, 100);
-        })
-        .catch(e => {
-          console.warn("Erreur lors du changement de musique:", e);
-          // Essayer avec une autre musique en cas d'échec
-          audioConfig.musicList = audioConfig.musicList.filter(m => m !== newMusicPath);
-          if (audioConfig.musicList.length > 0) {
-            setTimeout(changeRandomMusic, 500);
-          }
-        });
+  return true;
+}
+
+/* -----------------------------------------------------------------------------
+ *  DÉVERROUILLAGE AU PREMIER GESTE
+ *  Les navigateurs exigent une interaction avant tout son. On écoute une fois,
+ *  on déverrouille, on démarre la musique si le propriétaire en a déposé.
+ * -------------------------------------------------------------------------- */
+let _audioGestureArmed = false;
+
+function _armAudioGesture() {
+  if (_audioGestureArmed) return;
+  _audioGestureArmed = true;
+
+  const events = ['pointerdown', 'mousedown', 'touchstart', 'keydown'];
+  const onGesture = function () {
+    const ok = unlockAudioContext();
+    if (audioConfig.soundEnabled && audioConfig.musicList.length > 0 &&
+        (backgroundMusic.paused || !audioConfig.currentMusic)) {
+      playRandomMusic();
     }
-  }, 50);
-} 
+    if (ok) {
+      for (let i = 0; i < events.length; i++) {
+        window.removeEventListener(events[i], onGesture, true);
+      }
+    }
+  };
+  for (let i = 0; i < events.length; i++) {
+    window.addEventListener(events[i], onGesture, true);
+  }
+}
+
+/* =============================================================================
+ *  INITIALISATION — appelée par bootAudio() dans main.js, APRÈS le 1er rendu.
+ *  Ne bloque RIEN : retour immédiat, le manifeste arrive quand il arrive.
+ * ========================================================================== */
+function initAudioLists() {
+  applyAudioSettings();
+  _armAudioGesture();
+
+  // Synchronise les libellés des curseurs avec les valeurs persistées.
+  _setLabel('musicVolumeValue', Math.round(audioConfig.musicVolume * 100));
+  _setLabel('narrationVolumeValue', Math.round(audioConfig.narrationVolume * 100));
+  _setLabel('sfxVolumeValue', Math.round(audioConfig.sfxVolume * 100));
+
+  loadAudioManifest().then(function () {
+    audioFilesReady = true;
+    applyAudioSettings();
+    // Si le contexte est déjà déverrouillé (l'utilisateur a cliqué avant que le
+    // manifeste n'arrive), on lance la musique tout de suite.
+    const s = _sfx();
+    if (audioConfig.soundEnabled && audioConfig.musicList.length > 0 &&
+        s && s.isReady && s.isReady() && backgroundMusic.paused) {
+      playRandomMusic();
+    }
+  });
+
+  return true;
+}
+
+/* -----------------------------------------------------------------------------
+ *  Vérification ponctuelle d'un fichier (conservée pour compatibilité).
+ *  Une SEULE requête, sur un chemin précis. Plus aucun sondage en masse.
+ * -------------------------------------------------------------------------- */
+function isAudioFilePlayable(filePath) {
+  return new Promise(function (resolve) {
+    if (!filePath || typeof fetch !== 'function') { resolve(false); return; }
+    fetch(filePath, { method: 'HEAD' })
+      .then(function (r) { resolve(!!r.ok); })
+      .catch(function () { resolve(false); });
+  });
+}
+
+/* -----------------------------------------------------------------------------
+ *  Mise en arrière-plan : on met la musique en pause plutôt que de la laisser
+ *  tourner dans le vide (le jeu, lui, est déjà mis en pause par main.js).
+ * -------------------------------------------------------------------------- */
+document.addEventListener('visibilitychange', function () {
+  try {
+    if (document.hidden) {
+      if (!backgroundMusic.paused) {
+        backgroundMusic.__resumeOnReturn = true;
+        backgroundMusic.pause();
+      }
+    } else if (backgroundMusic.__resumeOnReturn) {
+      backgroundMusic.__resumeOnReturn = false;
+      if (audioConfig.soundEnabled) {
+        const p = backgroundMusic.play();
+        if (p && p.catch) p.catch(function () { /* ignoré */ });
+      }
+    }
+  } catch (e) { /* ignoré */ }
+});
