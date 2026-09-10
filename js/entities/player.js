@@ -72,7 +72,12 @@ const player = {
   /* --- EMPLACEMENT 1 : ARME PRINCIPALE (exclusive) --- */
   weapon: 'normal',               // voir PLAYER_WEAPONS
   weaponTimer: 0,                 // ms restantes de l'arme spéciale
-  weaponLevel: 1,                 // 1..3 — les power-ups s'empilent
+  weaponLevel: 1,                 // 1..3 — niveau de l'arme la plus récente
+  // ARMES CUMULÉES. Chaque type ramassé RESTE actif avec son propre niveau et
+  // sa propre minuterie : ramasser un spread n'éteint plus le laser, les deux
+  // tirent ensemble. `weapon` / `weaponLevel` / `weaponTimer` continuent de
+  // désigner la plus récente, pour le HUD et la cadence — rien n'est cassé.
+  weapons: {},                    // { type: { level: 1..3, timer: ms } }
 
   /* --- EMPLACEMENT 2 : BOUCLIER (charges, s'ajoute) --- */
   shield: 0,                      // nombre de charges restantes (0..3)
@@ -214,13 +219,24 @@ function setPlayerWeapon(type, durationMs) {
   if (!isPlayerWeapon(type) || type === 'normal') return PLAYER_WEAPON_LABELS.normal;
   const lvl = clamp(player.weaponLevel | 0, 1, 3);
 
-  if (player.weapon === type) {
-    player.weaponLevel = Math.min(3, lvl + 1);
+  const duree = durationMs == null ? TEMPO.POWERUP_DURATION_MS : durationMs;
+  if (!player.weapons) player.weapons = {};
+
+  // Le MÊME type monte d'un niveau ; un AUTRE type s'AJOUTE au lieu de
+  // remplacer. Chaque arme garde sa minuterie propre, ce qui récompense la
+  // collecte : tout ramassage apporte quelque chose.
+  const dejaLa = player.weapons[type];
+  if (dejaLa) {
+    dejaLa.level = Math.min(3, (dejaLa.level | 0) + 1);
+    dejaLa.timer = Math.max(dejaLa.timer, duree);
   } else {
-    player.weapon = type;
-    player.weaponLevel = Math.max(1, lvl);
+    player.weapons[type] = { level: 1, timer: duree };
   }
-  player.weaponTimer = durationMs == null ? TEMPO.POWERUP_DURATION_MS : durationMs;
+
+  // `weapon` suit la plus récente : c'est elle qui donne la cadence et le HUD.
+  player.weapon = type;
+  player.weaponLevel = player.weapons[type].level;
+  player.weaponTimer = player.weapons[type].timer;
   player.fireCooldown = 0;          // l'arme est prête tout de suite
   return getPlayerWeaponLabel();
 }
@@ -349,6 +365,7 @@ function resetPlayerPowerState() {
   player.weapon = 'normal';
   player.weaponTimer = 0;
   player.weaponLevel = 1;
+  player.weapons = {};
   player.shield = 0;
   player.shieldPulse = 0;
   player.shieldBreak = 0;
@@ -492,12 +509,17 @@ function updatePlayerFiring(deltaTime) {
 
   // LASER : faisceau CONTINU, aucune cadence. On note juste l'intention de tir ;
   // updatePlayerLaser() fait le reste (montée en puissance, dégâts, son).
-  if (player.weapon === 'laser') {
+  if (player.weapons && player.weapons.laser) {
     player.laser.on = wants;
-    if (wants && typeof INPUT !== 'undefined' && INPUT.consumeShoot) INPUT.consumeShoot();
-    return;
+    // ...mais s'il n'est pas seul, les autres armes doivent tirer aussi :
+    // on ne sort que si le laser est la seule arme active.
+    if (playerActiveWeapons().length <= 1) {
+      if (wants && typeof INPUT !== 'undefined' && INPUT.consumeShoot) INPUT.consumeShoot();
+      return;
+    }
+  } else {
+    player.laser.on = false;
   }
-  player.laser.on = false;
 
   if (player.fireCooldown <= 0 && wants) {
     firePlayerWeapon();
@@ -506,8 +528,26 @@ function updatePlayerFiring(deltaTime) {
   }
 }
 
-/** Envoie la salve correspondant à l'arme et au niveau courants. */
+/** Envoie une salve pour CHAQUE arme active. La logique par arme est inchangée :
+ *  on réaffecte simplement l'arme de référence le temps de chaque salve, puis on
+ *  restaure. Cumuler laser + spread tire donc les deux dans la même frame. */
 function firePlayerWeapon() {
+  const actives = playerActiveWeapons();
+  if (actives.length <= 1) { fireOneWeapon(); return; }
+  const savW = player.weapon, savL = player.weaponLevel;
+  for (let i = 0; i < actives.length; i++) {
+    // Le laser est CONTINU : il est géré par updatePlayerLaser(), pas ici.
+    if (actives[i].type === 'laser') continue;
+    player.weapon = actives[i].type;
+    player.weaponLevel = actives[i].level;
+    fireOneWeapon();
+  }
+  player.weapon = savW;
+  player.weaponLevel = savL;
+}
+
+/** Salve d'UNE arme — celle désignée par player.weapon. */
+function fireOneWeapon() {
   const lvl = clamp(player.weaponLevel | 0, 1, 3);
   const cx = player.x + player.width / 2;
   const noseY = player.y - 2;
@@ -655,18 +695,51 @@ function updateMuzzleFlashes(deltaTime) {
 
 /* ------------------------------------------------------------- arme spéciale */
 function updatePlayerWeaponTimer(deltaTime) {
-  if (player.weapon !== 'normal') {
-    player.weaponTimer -= deltaTime;
-    if (player.weaponTimer <= 0) {
-      player.weapon = 'normal';
-      player.weaponTimer = 0;
-      player.weaponLevel = 1;
-    }
-  } else if (player.weaponLevel !== 1) {
-    // game.js remet weapon='normal' quand le joueur est touché : on suit.
+  if (!player.weapons) player.weapons = {};
+
+  // game.js remet weapon='normal' quand le joueur est touché : on vide alors
+  // TOUTES les armes, sinon elles ressusciteraient à la frame suivante.
+  if (player.weapon === 'normal') {
+    for (const k in player.weapons) delete player.weapons[k];
     player.weaponLevel = 1;
     player.weaponTimer = 0;
+    return;
   }
+
+  // Chaque arme s'éteint pour son compte.
+  let restantes = 0, plusLongue = 0, typeLePlusLong = null;
+  for (const type in player.weapons) {
+    const a = player.weapons[type];
+    a.timer -= deltaTime;
+    if (a.timer <= 0) { delete player.weapons[type]; continue; }
+    restantes++;
+    if (a.timer > plusLongue) { plusLongue = a.timer; typeLePlusLong = type; }
+  }
+
+  if (!restantes) {
+    player.weapon = 'normal';
+    player.weaponLevel = 1;
+    player.weaponTimer = 0;
+    return;
+  }
+  // Si l'arme de référence vient d'expirer, on bascule sur celle qui durera
+  // le plus longtemps — le HUD et la cadence restent cohérents.
+  if (!player.weapons[player.weapon]) player.weapon = typeLePlusLong;
+  player.weaponLevel = player.weapons[player.weapon].level;
+  player.weaponTimer = player.weapons[player.weapon].timer;
+}
+
+/** Liste des armes actives, la plus récente en tête. */
+function playerActiveWeapons() {
+  const out = [];
+  if (!player.weapons) return out;
+  if (player.weapons[player.weapon]) {
+    out.push({ type: player.weapon, level: player.weapons[player.weapon].level });
+  }
+  for (const type in player.weapons) {
+    if (type !== player.weapon) out.push({ type: type, level: player.weapons[type].level });
+  }
+  return out;
 }
 
 /* =============================================================================
