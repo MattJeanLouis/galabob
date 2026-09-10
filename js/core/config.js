@@ -152,7 +152,13 @@ const TEMPO = {
  *  RENDER_CONFIG — qualité et post-traitement (lu par js/render/neon.js)
  * -------------------------------------------------------------------------- */
 const RENDER_CONFIG = {
-  maxPixelRatio: 2,     // plafond du devicePixelRatio (Retina = 2)
+  // Plafond du devicePixelRatio. MESURÉ sur un Retina : à 2, le canvas fait
+  // 4,6 Mpx et la composition coûte ~27 ms par frame CÔTÉ NAVIGATEUR (le JS,
+  // lui, ne consomme que 1,7 ms) — le pipeline néon traverse la surface 5 à 6
+  // fois par frame (scène, deux bloom, traînées, aberration, vignette), soit
+  // ~27 Mpx de remplissage. Le coût est donc proportionnel à la surface, et
+  // c'est le seul levier qui compte vraiment. À 1.5, la surface tombe de 44 %.
+  maxPixelRatio: 1.5,
   bloom: true,          // activer le moteur de bloom néon
   bloomIntensity: 1.0,  // 0 → 2
   bloomBlurA: 5,        // rayon de flou du buffer 1/4 (en px de ce buffer)
