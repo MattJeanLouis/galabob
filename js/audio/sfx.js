@@ -131,9 +131,21 @@ const SFX = (function () {
     S.voices++;
     return S.voices > config.softVoices ? 0.5 : 1;
   }
-  function watch(node, seconds) {
+  function watch(node, seconds, chain) {
     let done = false;
-    const release = function () { if (done) return; done = true; if (S.voices > 0) S.voices--; };
+    const release = function () {
+      if (done) return;
+      done = true;
+      if (S.voices > 0) S.voices--;
+      // DÉCONNEXION OBLIGATOIRE. Un node stoppé mais toujours branché reste
+      // dans le graphe, que Web Audio retraite à chaque quantum (~2,7 ms).
+      // Sans cela le graphe grossit à chaque tir — 9 par seconde — et le coût
+      // CPU monte sans jamais redescendre : le jeu part bien puis s'enlise.
+      const list = chain || [node];
+      for (let i = 0; i < list.length; i++) {
+        try { list[i].disconnect(); } catch (e) { /* déjà détaché */ }
+      }
+    };
     try { node.onended = release; } catch (e) { /* ignoré */ }
     setTimeout(release, Math.max(60, seconds * 1000 + 280));
   }
@@ -265,7 +277,8 @@ const SFX = (function () {
     if (o.detune) osc.detune.setValueAtTime(o.detune, t0);
 
     let node = osc;
-    if (o.filter) { const bq = makeFilter(ac, t0, dur, o.filter); node.connect(bq); node = bq; }
+    let bq = null;
+    if (o.filter) { bq = makeFilter(ac, t0, dur, o.filter); node.connect(bq); node = bq; }
 
     const gain = ac.createGain();
     env(gain.gain, t0, o.attack == null ? 0.004 : o.attack, dur, (o.gain == null ? 0.2 : o.gain) * lvl);
@@ -274,7 +287,7 @@ const SFX = (function () {
 
     osc.start(t0);
     osc.stop(t0 + dur + 0.06);
-    watch(osc, dur + (o.delay || 0) + 0.1);
+    watch(osc, dur + (o.delay || 0) + 0.1, bq ? [osc, bq, gain] : [osc, gain]);
   }
 
   /**
@@ -297,7 +310,8 @@ const SFX = (function () {
     const off = Math.random() * Math.max(0.01, S.noiseBuf.duration - dur - 0.05);
 
     let node = src;
-    if (o.filter) { const bq = makeFilter(ac, t0, dur, o.filter); node.connect(bq); node = bq; }
+    let bq = null;
+    if (o.filter) { bq = makeFilter(ac, t0, dur, o.filter); node.connect(bq); node = bq; }
 
     const gain = ac.createGain();
     env(gain.gain, t0, o.attack == null ? 0.003 : o.attack, dur, (o.gain == null ? 0.2 : o.gain) * lvl);
@@ -306,7 +320,7 @@ const SFX = (function () {
 
     src.start(t0, off, dur + 0.08);
     src.stop(t0 + dur + 0.08);
-    watch(src, dur + (o.delay || 0) + 0.12);
+    watch(src, dur + (o.delay || 0) + 0.12, bq ? [src, bq, gain] : [src, gain]);
   }
 
   /* ------------------------------------------------------------- DUCKING */

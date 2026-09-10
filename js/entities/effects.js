@@ -60,7 +60,7 @@ const FX_SHOCK = 1;
 const FX_SPARK = 2;
 const FX_RESIDUE = 3;
 
-const FX_MAX = 700;          // plafond de particules d'explosion
+const FX_MAX = 380;          // plafond de particules d'explosion
 const FX_DEBRIS_MAX = 220;   // plafond d'éclats
 const FX_POPUP_MAX = 20;     // plafond de popups (au-delà, plus rien n'est lisible)
 /** Bas du bandeau HUD (px CSS) : les popups de score ne montent jamais plus haut. */
@@ -356,7 +356,12 @@ function createExplosion(x, y, type = 'normal', opts) {
   // 3) GERBE D'ÉTINCELLES — étoile irrégulière, à la couleur de l'ennemi.
   //    Les vitesses sont TRÈS étalées : sans ça, toutes les étincelles se
   //    retrouvent sur le même cercle et la gerbe ressemble à un cadran.
-  const count = Math.round((opts.sparks || spec.sparks) * (1.5 + Math.random() * 0.5));
+  // Le multiplicateur était de 1,5 à 2,0 : un ennemi « normal » annoncé à 15
+  // étincelles en produisait 22 à 30, et une élite jusqu'à 60. Chaque étincelle
+  // étant tracée DEUX fois (scène + buffer de traînées), une salve de kills
+  // saturait le remplissage GPU — dont le coût, différé, n'apparaît pas dans
+  // draw(). Ramené autour de la valeur annoncée, qui était déjà généreuse.
+  const count = Math.round((opts.sparks || spec.sparks) * (0.85 + Math.random() * 0.3));
   const base = Math.random() * Math.PI * 2;
   for (let i = 0; i < count; i++) {
     const angle = base + (Math.PI * 2 * i) / count + randRange(-0.42, 0.42);
