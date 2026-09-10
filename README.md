@@ -2,17 +2,15 @@
 
 **Un shoot'em up néon vectoriel en JavaScript pur.** Pas de moteur, pas de framework, pas de build : du Canvas 2D et rien d'autre.
 
-```
-                    ▲̵̶
-                   ╱╲╲        ✵ · ✦ · ✵
-                  ╱  ╲╲      ·  ✧  ·  ✦
-                 ═════▲═════
-                      ║║
-```
+![Écran-titre de Galabob](docs/menu.jpg)
 
 ## Ce que c'est
 
 Un Galaga repensé pour la sensation. Tout ce qui bouge laisse une traînée lumineuse, tout ce qui meurt explose en gerbe, et chaque impact fige brièvement l'image avant de secouer la caméra.
+
+![Une partie en cours](docs/combat.jpg)
+
+*Une planète à anneaux en fil de fer, des traînées qui persistent, le multiplicateur de chaîne en bas à gauche, et l'objectif du stage en haut.*
 
 ## Ce qu'il y a dedans
 
