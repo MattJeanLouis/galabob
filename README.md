@@ -48,7 +48,15 @@ Puis ouvrir <http://localhost:8000>.
 | A | Réglages audio |
 | F3 | Statistiques de debug |
 
-Pour ajouter tes propres musiques : dépose des fichiers dans `assets/audio/musique/` et déclare-les dans `assets/audio/manifest.json`.
+Pour ajouter tes propres musiques ou narrations : **dépose simplement les fichiers** dans `assets/audio/musique/` ou `assets/audio/narration/`. Le jeu lit le contenu du dossier au chargement — une seule requête, rien à déclarer. Les formats `mp3`, `ogg`, `wav`, `m4a`, `aac`, `flac`, `opus` et `webm` sont reconnus, accents et espaces compris.
+
+Si tu veux fixer l'ordre des pistes, leur donner un titre ou corriger le volume de l'une d'elles, déclare-les dans `assets/audio/manifest.json` — il prend alors le pas sur la détection automatique :
+
+```json
+"pistes": ["intro.mp3", { "fichier": "trop_fort.wav", "titre": "Assaut final", "gain": 0.6 }]
+```
+
+Sans aucune piste, une nappe musicale procédurale prend le relais.
 
 ## Sous le capot
 

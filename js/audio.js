@@ -216,6 +216,49 @@ function _audioReadSection(section, defaultFolder) {
 function loadAudioManifest() {
   audioConfig.manifestError = null;
 
+
+/* ---------------------------------------------------------------------------
+ *  DÉCOUVERTE AUTOMATIQUE — « je dépose, ça marche »
+ * ---------------------------------------------------------------------------
+ *  La plupart des serveurs statiques (dont `python -m http.server`) renvoient
+ *  la liste d'un dossier en HTML quand on le demande. UNE requête suffit donc
+ *  à connaître son contenu — à comparer aux 2112 requêtes du sondage par force
+ *  brute qui polluait la console de 404.
+ *
+ *  Le manifeste reste prioritaire : il permet de fixer un ordre, un titre ou un
+ *  gain. Mais s'il est vide, on regarde simplement ce qu'il y a dans le
+ *  dossier. Si le serveur n'expose pas d'index (hébergement statique fermé,
+ *  GitHub Pages), on n'insiste pas : le manifeste reprend la main.
+ * ------------------------------------------------------------------------- */
+const AUDIO_EXT = ['.mp3', '.ogg', '.wav', '.m4a', '.aac', '.flac', '.opus', '.webm'];
+
+function _audioScanDossier(dossier) {
+  if (typeof fetch !== 'function') return Promise.resolve([]);
+  return fetch(dossier, { cache: 'no-cache' })
+    .then(function (r) { return r.ok ? r.text() : ''; })
+    .then(function (html) {
+      if (!html) return [];
+      const noms = [];
+      // On lit les href de l'index. `decodeURIComponent` restitue les accents
+      // et les espaces, fréquents dans les noms de fichiers musicaux.
+      const re = /href\s*=\s*["']([^"'?#]+)["']/gi;
+      let m;
+      while ((m = re.exec(html)) !== null) {
+        let nom = m[1];
+        if (nom.indexOf('/') !== -1) nom = nom.substring(nom.lastIndexOf('/') + 1);
+        try { nom = decodeURIComponent(nom); } catch (e) { /* nom déjà lisible */ }
+        if (!nom || nom.charAt(0) === '.') continue;
+        const bas = nom.toLowerCase();
+        for (let i = 0; i < AUDIO_EXT.length; i++) {
+          if (bas.endsWith(AUDIO_EXT[i])) { if (noms.indexOf(nom) === -1) noms.push(nom); break; }
+        }
+      }
+      noms.sort();
+      return noms.map(function (n) { return dossier + n; });
+    })
+    .catch(function () { return []; });   // pas d'index exposé : silencieux
+}
+
   if (typeof fetch !== 'function') {
     audioConfig.manifestLoaded = true;
     return Promise.resolve(false);
@@ -234,23 +277,40 @@ function loadAudioManifest() {
         data.narration || data.narrations || data.voix || data.voice,
         'assets/audio/narration/');
 
-      audioConfig.musicList = musique;
-      audioConfig.narrationList = narration;
-      audioConfig.playedMusicList = [];
-      audioConfig.playedNarrationList = [];
-      audioConfig.manifestLoaded = true;
+      // Le manifeste prime. S'il ne déclare rien, on regarde le dossier :
+      // déposer un fichier suffit alors, sans rien avoir à écrire.
+      const aScanner = [];
+      aScanner.push(musique.length ? Promise.resolve(musique)
+                                   : _audioScanDossier('assets/audio/musique/'));
+      aScanner.push(narration.length ? Promise.resolve(narration)
+                                     : _audioScanDossier('assets/audio/narration/'));
 
-      // Plusieurs pistes -> vraie playlist (enchaînement), sinon boucle.
-      backgroundMusic.loop = (musique.length <= 1);
+      return Promise.all(aScanner).then(function (res) {
+        const mus = res[0] || [];
+        const nar = res[1] || [];
+        const scanMus = !musique.length && mus.length;
+        const scanNar = !narration.length && nar.length;
 
-      console.log('[audio] manifeste chargé : ' + musique.length + ' piste(s) de musique, ' +
-                  narration.length + ' narration(s).');
-      if (musique.length === 0) {
-        console.log('[audio] aucune piste : la nappe procédurale prend le relais. ' +
-                    'Pour ajouter vos musiques, déposez-les dans assets/audio/musique/ ' +
-                    'et listez-les dans ' + audioConfig.manifestUrl + '.');
-      }
-      return true;
+        audioConfig.musicList = mus;
+        audioConfig.narrationList = nar;
+        audioConfig.playedMusicList = [];
+        audioConfig.playedNarrationList = [];
+        audioConfig.manifestLoaded = true;
+
+        // Plusieurs pistes -> vraie playlist (enchaînement), sinon boucle.
+        backgroundMusic.loop = (mus.length <= 1);
+
+        console.log('[audio] ' + mus.length + ' piste(s) de musique' +
+                    (scanMus ? ' (trouvées dans le dossier)' : '') + ', ' +
+                    nar.length + ' narration(s)' +
+                    (scanNar ? ' (trouvées dans le dossier)' : '') + '.');
+        if (mus.length === 0) {
+          console.log('[audio] aucune piste : la nappe procédurale prend le relais. ' +
+                      'Déposez vos fichiers dans assets/audio/musique/ — ils seront ' +
+                      'détectés automatiquement au prochain chargement.');
+        }
+        return true;
+      });
     })
     .catch(function (err) {
       audioConfig.manifestLoaded = true;
