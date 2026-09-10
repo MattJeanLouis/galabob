@@ -435,7 +435,7 @@ const NEON = (function () {
     if (typeof gameState !== 'undefined' && gameState !== 'playing') return;
     if (FRAME.fps < 45) {
       S.slowFrames++;
-      if (S.slowFrames > 240 && RENDER_CONFIG.quality > 0) {
+      if (S.slowFrames > 90 && RENDER_CONFIG.quality > 0) {
         RENDER_CONFIG.quality--;
         S.slowFrames = 0;
         console.info('NEON : qualité rétrogradée à', RENDER_CONFIG.quality);

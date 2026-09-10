@@ -158,8 +158,12 @@ function menaceFor(stage, loop) {
     // L'ancien budget lerp(14, 48) était dimensionné pour l'ancienne cadence :
     // les stages se soldaient en quelques secondes. Remonté d'autant.
     budget: Math.round(clamp(lerp(32, 96, k) * (1 + sur * 0.22), 26, 190)),
-    premiereVague: Math.round(clamp(lerp(8, 22, k) * (1 + sur * 0.12), 6, 26)),
-    fieldTarget: Math.round(clamp(lerp(8, 18, k) * (1 + sur * 0.18), 7, 22)),
+    // ATTENTION : `budget` règle la DURÉE du stage, `fieldTarget` règle le
+    // COÛT DE RENDU. Chaque entité coûte 4 passes de tracé néon, donc gonfler
+    // l'effectif simultané se paie en framerate — ce que le budget total, lui,
+    // ne coûte rien. On garde donc des stages longs SANS surcharger l'écran.
+    premiereVague: Math.round(clamp(lerp(6, 16, k) * (1 + sur * 0.12), 5, 20)),
+    fieldTarget: Math.round(clamp(lerp(6, 14, k) * (1 + sur * 0.18), 5, 16)),
     fieldReinforce: 0,                 // calculé juste après (dépend de fieldTarget)
 
     /* --- feu ---
