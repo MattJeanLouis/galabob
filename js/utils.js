@@ -177,7 +177,7 @@ const JUICE = (function () {
 
   /* --- presets : un seul appel pour un ressenti cohérent partout ----------- */
   const PRESETS = {
-    playerShot:   { hitstop: 0,   shake: 0.045, kick: [0, 1.5] },
+    playerShot:   { hitstop: 0,   shake: 0.010, kick: [0, 1.5] },
     playerShotBig:{ hitstop: 8,  shake: 0.09,  kick: [0, 3] },
     enemyHit:     { hitstop: 10,  shake: 0.10 },
     enemyKill:    { hitstop: 26,  shake: 0.22, punch: 0.006 },
@@ -318,14 +318,23 @@ const JUICE = (function () {
      *  Le contexte doit déjà être en repère CSS px. Faire un save() avant. */
     applyCamera: function (c) {
       if (!c) return;
-      const ox = state.offsetX + state.kickX;
-      const oy = state.offsetY + state.kickY;
+      // TRANSLATION ARRONDIE AU PIXEL. Une translation fractionnaire oblige le
+      // navigateur à rééchantillonner chaque drawImage au lieu d'en faire une
+      // copie directe — or le décor est une pile d'images plein écran.
+      const ox = Math.round(state.offsetX + state.kickX);
+      const oy = Math.round(state.offsetY + state.kickY);
       if (ox || oy) c.translate(ox, oy);
-      if (state.rotation || state.punch) {
+      // SEUIL SUR LA ROTATION. Le trauma ne retombe jamais tout à fait à zéro
+      // (le tir en réinjecte neuf fois par seconde), donc la rotation restait
+      // infime mais NON NULLE — invisible à l'œil, mais suffisante pour
+      // interdire tout chemin rapide et faire refiltrer 4,6 Mpx à chaque frame.
+      const rot = Math.abs(state.rotation) > 0.0025 ? state.rotation : 0;
+      const pun = Math.abs(state.punch) > 0.0015 ? state.punch : 0;
+      if (rot || pun) {
         const cx = CANVAS_WIDTH / 2, cy = CANVAS_HEIGHT / 2;
         c.translate(cx, cy);
-        if (state.rotation) c.rotate(state.rotation);
-        if (state.punch) c.scale(1 + state.punch, 1 + state.punch);
+        if (rot) c.rotate(rot);
+        if (pun) c.scale(1 + pun, 1 + pun);
         c.translate(-cx, -cy);
       }
     },
