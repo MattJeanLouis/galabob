@@ -2,24 +2,31 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#05060f">
   <title>Galabob – Assaut Vectoriel</title>
   <!-- Favicon en ligne : évite la requête 404 automatique du navigateur. -->
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' fill='%2305060f'/%3E%3Cpath d='M16 5 L26 26 L16 21 L6 26 Z' fill='none' stroke='%233df5ff' stroke-width='2.5' stroke-linejoin='round'/%3E%3C/svg%3E">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
-  <canvas id="gameCanvas" width="800" height="600"></canvas>
+  <canvas id="gameCanvas" width="800" height="600" tabindex="0"
+          aria-label="Galabob, shoot'em up vectoriel jouable au clavier et au pointeur">
+    Votre navigateur ne prend pas en charge Canvas 2D, necessaire pour jouer a Galabob.
+  </canvas>
   
   <!-- Panneau de contrôle du volume -->
-  <div class="volume-controls" id="volumeControls">
-    <h3>Paramètres Audio</h3>
+  <div class="volume-controls" id="volumeControls" role="dialog"
+       aria-modal="false" aria-labelledby="audioSettingsTitle">
+    <h3 id="audioSettingsTitle">Paramètres Audio</h3>
     
     <div class="volume-group">
       <div class="volume-label">
         <span>Musique</span>
         <span id="musicVolumeValue">50%</span>
       </div>
-      <input type="range" id="musicVolume" class="volume-slider" min="0" max="100" value="50">
+      <input type="range" id="musicVolume" class="volume-slider" min="0" max="100" value="50"
+             aria-label="Volume de la musique">
     </div>
     
     <div class="volume-group">
@@ -27,7 +34,8 @@
         <span>Narration</span>
         <span id="narrationVolumeValue">80%</span>
       </div>
-      <input type="range" id="narrationVolume" class="volume-slider" min="0" max="100" value="80">
+      <input type="range" id="narrationVolume" class="volume-slider" min="0" max="100" value="80"
+             aria-label="Volume de la narration">
     </div>
     
     <div class="volume-group">
@@ -35,7 +43,8 @@
         <span>Effets sonores</span>
         <span id="sfxVolumeValue">70%</span>
       </div>
-      <input type="range" id="sfxVolume" class="volume-slider" min="0" max="100" value="70">
+      <input type="range" id="sfxVolume" class="volume-slider" min="0" max="100" value="70"
+             aria-label="Volume des effets sonores">
     </div>
     
     <div class="checkbox-container">
@@ -62,7 +71,8 @@
              l'appelle en boucle (update / drawDeep / drawFront).
        5. audio.js   : audioConfig, manifeste, lecteur de musique
        6. sfx.js     : SFX (bruitages procéduraux) — juste après audio.js
-       …puis les modules de jeu, game.js, et enfin main.js.
+       …puis les modules de jeu, game.js, bootstrap.js (runtime ES module),
+       et enfin main.js.
        `canvas` / `ctx` sont déclarés dans main.js : aucun script ne doit y
        accéder au moment de son évaluation, seulement à l'exécution.
        =================================================================== -->
@@ -74,18 +84,22 @@
   <script src="js/audio.js"></script>
   <script src="js/audio/sfx.js"></script>
   <script src="js/core/input.js"></script>
+  <script src="js/content/modes/arcade-progression.js"></script>
+  <script src="js/content/modes/assault-progression.js"></script>
   <script src="js/core/stages.js"></script>
   <script src="js/entities/stars.js"></script>
   <script src="js/entities/player.js"></script>
   <script src="js/entities/enemies.js"></script>
   <script src="js/entities/projectiles.js"></script>
   <script src="js/entities/effects.js"></script>
+  <script src="js/content/powerups/catalogue.js"></script>
   <script src="js/entities/powerups.js"></script>
   <!-- boss.js : après enemies/projectiles/effects (il s'en sert), avant game.js -->
   <script src="js/entities/boss.js"></script>
   <script src="js/ui/menus.js"></script>
   <script src="js/ui/hud.js"></script>
   <script src="js/game.js"></script>
+  <script type="module" src="js/bootstrap.js"></script>
   <script src="js/main.js"></script>
 </body>
-</html> 
+</html>

@@ -183,6 +183,12 @@ function init() {
   try {
     highScore = Number(localStorage.getItem('highScore')) || 0;
   } catch (e) { /* ignoré */ }
+  try {
+    const runtime = window.GALABOB;
+    const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+    const saved = runtime && runtime.profile && mode ? runtime.profile.mode(mode.id) : null;
+    if (saved) highScore = Math.max(Number(highScore) || 0, Number(saved.highScore) || 0);
+  } catch (e) { /* le profil moderne reste optionnel pendant la migration */ }
 
   // Moteur de rendu néon (alloue ses buffers, puis resizeCanvas les redimensionne)
   NEON.init(canvas, ctx);

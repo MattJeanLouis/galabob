@@ -208,7 +208,10 @@ const FORMATIONS = {
   GRID: 'grid',
   DIAMOND: 'diamond',
   CIRCLE: 'circle',
-  DOUBLE_ROW: 'doubleRow'
+  DOUBLE_ROW: 'doubleRow',
+  WEDGE: 'wedge',
+  ARC: 'arc',
+  COLUMNS: 'columns'
 };
 
 // Configurations des chorégraphies d'entrée

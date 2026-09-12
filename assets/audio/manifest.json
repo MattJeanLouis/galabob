@@ -1,7 +1,7 @@
 {
-  "_lisezmoi": "POUR AJOUTER VOS PISTES : déposez le fichier dans assets/audio/musique/ (ou assets/audio/narration/) puis ajoutez simplement son nom entre guillemets dans la liste \"pistes\" correspondante ci-dessous, séparé par une virgule. C'est tout.",
+  "_lisezmoi": "POUR AJOUTER VOS PISTES : en production, déposez le fichier dans assets/audio/musique/ (ou assets/audio/narration/) puis ajoutez son nom entre guillemets dans la liste \"pistes\" correspondante ci-dessous.",
   "_exemple": "\"pistes\": [\"ma_musique.mp3\", \"autre_piste.ogg\", { \"fichier\": \"trop_fort.wav\", \"titre\": \"Assaut final\", \"gain\": 0.6 }]",
-  "_note": "Une entrée peut être un simple nom de fichier, ou un objet { fichier, titre, gain } — `gain` (0 à 1) permet d'équilibrer une piste trop forte sans la ré-encoder. Ce manifeste est la SEULE source de vérité : le jeu ne sonde plus les dossiers, c'est ce qui garantit zéro erreur 404 en console. Un manifeste vide est parfaitement valide : la nappe musicale procédurale (js/audio/sfx.js) prend alors le relais et les bruitages, eux, sont toujours 100 % synthétisés.",
+  "_note": "Une entrée peut être un simple nom de fichier, ou un objet { fichier, titre, gain } — `gain` (0 à 1) permet d'équilibrer une piste trop forte sans la ré-encoder. Avec un serveur local qui expose l'index des dossiers, un manifeste vide déclenche une détection automatique. En production, déclarez les pistes ici : la plupart des serveurs désactivent les index de dossiers. Sans piste, la nappe procédurale (js/audio/sfx.js) prend le relais.",
   "version": 1,
   "musique": {
     "dossier": "assets/audio/musique/",

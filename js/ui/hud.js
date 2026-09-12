@@ -137,16 +137,55 @@ function drawHUD() {
   updateHudState(dt);
 
   drawScoreBlock(c, pad, S);
+  drawAssaultCreditBlock(c, pad, S);
   drawStageBlock(c, S);
   drawLivesBlock(c, W - pad, S);
   drawComboGauge(c, pad, H - pad, S);
   drawWeaponGauge(c, W - pad, H - pad, S);
   drawPlayerStatus(c, S);
+  drawAssaultManeuverZone(c, S);
   drawDangerFrame(c, S);
   drawHudAlert(c, S);
 
   // Pas de bouton en jeu : le pointeur disparaît pour ne pas parasiter l'action.
   UIKIT.endScreen('none');
+}
+
+function drawAssaultCreditBlock(c, pad, S) {
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  if (!mode || mode.id !== 'assault' || typeof mode.getState !== 'function') return;
+  const credits = Math.round(mode.getState().credits || 0);
+  const y = Math.max(82, 92 * S);
+  UIKIT.label(c, 'CRÉDITS', pad, y, PALETTE.ui.textDim, {
+    size: 8.5 * S, tracking: 3.2 * S, align: 'left', alpha: 0.72
+  });
+  UIKIT.vector(c, credits + ' CR', pad, y + 7 * S, 18 * S, PALETTE.ui.combo, {
+    align: 'left', tracking: 2.5 * S, width: 1.35 * S, alpha: 0.95
+  });
+}
+
+/** Limite de pilotage verticale du mode Assaut, discrète mais explicite. */
+function drawAssaultManeuverZone(c, S) {
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  if (!mode || mode.id !== 'assault') return;
+
+  const y = CANVAS_HEIGHT * 0.60;
+  c.save();
+  c.globalAlpha = 0.16;
+  c.strokeStyle = PALETTE.ui.accent;
+  c.lineWidth = Math.max(1, S);
+  c.setLineDash([5 * S, 12 * S]);
+  c.beginPath();
+  c.moveTo(20 * S, y);
+  c.lineTo(CANVAS_WIDTH - 20 * S, y);
+  c.stroke();
+  c.restore();
+
+  UIKIT.label(c, 'ZONE DE MANŒUVRE', CANVAS_WIDTH / 2, y + 15 * S, PALETTE.ui.accent, {
+    size: 8 * S, tracking: 3 * S, align: 'center', alpha: 0.22
+  });
 }
 
 /* -----------------------------------------------------------------------------
@@ -299,9 +338,13 @@ function drawStageBlock(c, S) {
     : ((typeof stageSystem !== 'undefined' && stageSystem) ? stageSystem.currentStage : 1);
   const per = (typeof stageSystem !== 'undefined' && stageSystem) ? (stageSystem.enemiesPerStage | 0) : 0;
   const done = (typeof stageSystem !== 'undefined' && stageSystem) ? (stageSystem.enemiesDefeated | 0) : 0;
+  const mode = window.GALABOB && window.GALABOB.modes ? window.GALABOB.modes.current() : null;
+  const assault = mode && mode.id === 'assault';
+  const modeState = assault && typeof mode.getState === 'function' ? mode.getState() : null;
 
   const size = 15 * S * (1 + st.stagePunch * 0.28);
-  UIKIT.vector(c, 'STAGE ' + stage, cx, y - size * 0.2, size, PALETTE.ui.text, {
+  UIKIT.vector(c, (assault ? 'ASSAUT ' : 'STAGE ') + stage, cx, y - size * 0.2, size,
+    assault ? PALETTE.ui.combo : PALETTE.ui.text, {
     align: 'center', tracking: size * 0.32, width: Math.max(1.2, size * 0.085),
     alpha: 0.85 + st.stagePunch * 0.15, glowScale: 1 + st.stagePunch
   });
@@ -326,9 +369,28 @@ function drawStageBlock(c, S) {
   ends.moveTo(bx + bw + 6 * S, by - 3); ends.lineTo(bx + bw + 6 * S, by + bh + 3);
   NEON.custom(c, ends, col, 1.4, { alpha: 0.5 });
 
-  UIKIT.label(c, done + ' / ' + per, cx, by + bh + 15 * S, PALETTE.ui.textDim, {
+  const progressLabel = done + ' / ' + per;
+  UIKIT.label(c, progressLabel, cx, by + bh + 15 * S, PALETTE.ui.textDim, {
     size: 10 * S, tracking: 2 * S, align: 'center', alpha: 0.7, mono: true
   });
+
+  if (modeState) {
+    const weapon = (typeof player !== 'undefined' && player) ? player.weapon : 'normal';
+    let ammoText;
+    if (weapon === 'double' || weapon === 'spread') {
+      ammoText = weapon.toUpperCase() + ' · EXTENSION PERMANENTE';
+    } else if (weapon !== 'normal') {
+      ammoText = weapon.toUpperCase() + ' · ' + (modeState.ammo[weapon] || 0) + ' MUNITIONS';
+    } else if (modeState.reloadRemaining > 0) {
+      ammoText = 'RECHARGE · ' + (modeState.reloadRemaining / 1000).toFixed(1) + 's';
+    } else {
+      ammoText = 'CHARGEUR · ' + modeState.magazine + ' / ' + modeState.magazineMax;
+    }
+    UIKIT.label(c, ammoText, cx, by + bh + 29 * S,
+      modeState.reloadRemaining > 0 ? PALETTE.ui.warn : PALETTE.ui.combo, {
+        size: 9 * S, tracking: 2.2 * S, align: 'center', alpha: 0.82, mono: true
+      });
+  }
 
   if (nearEnd) {
     const p = 0.5 + 0.5 * Math.sin(FRAME.realTime * 7);
@@ -485,10 +547,25 @@ function drawWeaponGauge(c, right, bottom, S) {
   const left = player.weaponTimer || 0;
   if (weapon === 'normal' || left <= 0) return;
 
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  const assaultState = mode && mode.id === 'assault' && typeof mode.getState === 'function'
+    ? mode.getState() : null;
+
   const st = HUD_STATE;
   const names = { double: 'TIR DOUBLE', spread: 'TIR DISPERSÉ', life: 'BOUCLIER' };
   const name = names[weapon] || String(weapon).toUpperCase();
   const col = PALETTE.weapon(weapon).glow;
+  if (assaultState) {
+    const extensions = weapon === 'double' || weapon === 'spread';
+    const ammo = assaultState.ammo && assaultState.ammo[weapon] || 0;
+    UIKIT.label(c, name, right, bottom - 28 * S, col, {
+      size: 11 * S, tracking: 3.0 * S, align: 'right', alpha: 0.9
+    });
+    UIKIT.vector(c, extensions ? 'PERMANENT' : ammo + ' MUN', right, bottom - 8 * S,
+      14 * S, col, { align: 'right', tracking: 2 * S, width: 1.2 * S, alpha: 0.9 });
+    return;
+  }
   const total = TEMPO.POWERUP_DURATION_MS || 9000;
   const frac = clamp(left / total, 0, 1);
 

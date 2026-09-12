@@ -21,10 +21,9 @@
  *
  *  COMMENT LE PROPRIÉTAIRE AJOUTE SES PISTES
  *  -----------------------------------------
- *  1. déposer les fichiers dans assets/audio/musique/ (ou narration/)
- *  2. ajouter leur nom dans assets/audio/manifest.json
- *  Aucune détection magique : le manifeste est la seule source de vérité, et
- *  c'est précisément ce qui garantit ZÉRO 404 en console.
+ *  En production, les pistes sont déclarées dans assets/audio/manifest.json.
+ *  En développement, un manifeste vide autorise une unique lecture de l'index
+ *  des dossiers quand le serveur local en fournit un.
  *
  *  BRUITAGES
  *  ---------

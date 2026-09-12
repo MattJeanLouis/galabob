@@ -57,9 +57,22 @@ const INPUT = {
     return !!(keys['ArrowRight'] || keys['Right'] || keys['d'] || keys['D']);
   },
 
+  up: function () {
+    return !!(keys['ArrowUp'] || keys['Up'] || keys['z'] || keys['Z'] || keys['w'] || keys['W']);
+  },
+
+  down: function () {
+    return !!(keys['ArrowDown'] || keys['Down'] || keys['s'] || keys['S']);
+  },
+
   /** Direction horizontale : -1, 0 ou +1. */
   axisX: function () {
     return (this.right() ? 1 : 0) - (this.left() ? 1 : 0);
+  },
+
+  /** Direction verticale : -1 vers le haut, +1 vers le bas. */
+  axisY: function () {
+    return (this.down() ? 1 : 0) - (this.up() ? 1 : 0);
   },
 
   /** true si un appui récent est encore en attente d'être servi. */
@@ -193,6 +206,22 @@ document.addEventListener('keydown', function (e) {
     gameState = "settings";
   }
 
+  // Sélection rapide depuis le menu. Ces raccourcis correspondent aux boutons
+  // visibles et ne doivent pas déclencher leur ancienne fonction audio.
+  if ((e.key === 'm' || e.key === 'M') && gameState === "menu") {
+    if (window.GALABOB && typeof window.GALABOB.selectNextMode === 'function') {
+      window.GALABOB.selectNextMode();
+      _uiClick('mode');
+    }
+  }
+
+  if ((e.key === 'v' || e.key === 'V') && gameState === "menu") {
+    if (window.GALABOB && typeof window.GALABOB.selectNextShip === 'function') {
+      window.GALABOB.selectNextShip();
+      _uiClick('ship');
+    }
+  }
+
   // Touche F3 pour afficher/masquer les stats
   if (e.key === 'F3') {
     GAME_CONFIG.showDebugInfo = !GAME_CONFIG.showDebugInfo;
@@ -205,7 +234,7 @@ document.addEventListener('keydown', function (e) {
   }
 
   // Touche M pour changer la musique
-  if ((e.key === 'm' || e.key === 'M') &&
+  if ((e.key === 'm' || e.key === 'M') && gameState !== "menu" &&
       typeof audioConfig !== 'undefined' && audioConfig && audioConfig.soundEnabled) {
     if (typeof changeRandomMusic === 'function') {
       changeRandomMusic();
@@ -277,8 +306,8 @@ document.addEventListener('DOMContentLoaded', function () {
 
   canvas.addEventListener('click', function (e) {
     const bounds = canvas.getBoundingClientRect();
-    const mouseX = e.clientX - bounds.left;
-    const mouseY = e.clientY - bounds.top;
+    const mouseX = (e.clientX - bounds.left) * CANVAS_WIDTH / bounds.width;
+    const mouseY = (e.clientY - bounds.top) * CANVAS_HEIGHT / bounds.height;
 
     const soundOff = !(typeof audioConfig !== 'undefined' && audioConfig && audioConfig.soundEnabled);
 

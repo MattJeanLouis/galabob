@@ -20,17 +20,17 @@ Un hommage à Galaga, repensé pour la sensation. Tout ce qui bouge laisse une t
 
 **Les traînées.** Buffer persistant atténué par purge roulante — chaque frame nettoie une bande différente, ce qui casse l'arrondi 8 bits et permet des traînées longues sans le voile résiduel qui les accompagne d'habitude.
 
-**Le monde.** 20 stages, chacun avec son ciel : nébuleuses, planètes vectorielles à anneaux, lunes en orbite. Comètes, pluies de météores, éclipses et tempêtes magnétiques traversent le décor. Le fond réagit au jeu — il pulse aux explosions et vire au rouge quand la dernière vie s'approche.
+**Le monde.** 100 stages Arcade et une campagne Assaut de 30 secteurs, avec des formations et des ciels évolutifs : nébuleuses, planètes vectorielles à anneaux, lunes en orbite. Comètes, pluies de météores, éclipses et tempêtes magnétiques traversent le décor.
 
 **Les boss.** Un tous les cinq stages, en trois phases chacun. *La Ruche* libère des essaims. *Le Prisme* se scinde en fragments qui renvoient ses rayons. *Le Serpent* ondule et perd ses segments un par un. *Le Cœur* recombine les trois.
 
-**L'arsenal.** Treize power-ups sur trois emplacements indépendants : une arme (laser perforant, missiles chercheurs, mitraille, onde), un bouclier, et des modificateurs cumulables (ralenti, aimant, multiplicateur). Laser niveau 3 + bouclier + multiplicateur se combinent.
+**L'arsenal.** Seize power-ups sur trois emplacements indépendants. En Assaut, Double et Spread sont des extensions permanentes ; les armes lourdes trouvées sur le terrain utilisent des munitions. Entre les secteurs, le vaisseau entre dans une salle d'arsenal jouable où les achats et le choix de la prochaine route se font en tirant.
 
 **Le son.** Entièrement synthétisé en Web Audio — aucun fichier audio. Chaque bruitage est généré à la volée avec une légère variation pour ne jamais lasser.
 
 ## Jouer
 
-Le jeu a besoin d'un serveur local (les modules sont chargés par HTTP) :
+Le jeu a besoin d'un serveur local (les scripts et le manifeste audio sont chargés par HTTP) :
 
 ```bash
 python3 -m http.server 8000
@@ -38,9 +38,17 @@ python3 -m http.server 8000
 
 Puis ouvrir <http://localhost:8000>.
 
+Avec Node.js 20 ou plus récent, les contrôles automatisés du projet se lancent
+sans installer de dépendance :
+
+```bash
+npm run check
+```
+
 | Touche | Action |
 |---|---|
 | ← → | Déplacer |
+| ZQSD / flèches (Assaut) | Se déplacer librement dans la zone basse |
 | Espace | Tirer (maintenir pour l'auto-fire) |
 | P | Pause |
 | A | Réglages audio |
@@ -68,6 +76,12 @@ js/
 ├── ui/         HUD, menus
 └── audio/      synthèse procédurale
 ```
+
+La migration vers une architecture modulaire est documentée dans
+[`docs/architecture.md`](docs/architecture.md). Le runtime moderne expose un
+registre de modes ; le gameplay actuel est son premier mode, `arcade`.
+Les objectifs produit et leur ordre sont conservés dans
+[`docs/roadmap.md`](docs/roadmap.md).
 
 ## Licence
 

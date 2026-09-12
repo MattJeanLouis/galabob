@@ -60,6 +60,8 @@ const BACKDROP = (function () {
   'use strict';
 
   const TAU = Math.PI * 2;
+  const REDUCED_MOTION = typeof window !== 'undefined' && window.matchMedia &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
   /* ------------------------------------------------------------- outils */
 
@@ -308,7 +310,7 @@ const BACKDROP = (function () {
     parts: [], sigFade: 1, sigSwap: false,
 
     /* orbites / temps */
-    t: 0, moonT: 0,
+    t: 0, moonT: 0, travelY: 0,
 
     /* événements */
     ev: {},               // { comet, meteors, eclipse, storm, aurora }
@@ -587,6 +589,40 @@ const BACKDROP = (function () {
     }
   }
 
+  /** Volume peint pré-rendu : le néon devient un accent, plus la matière même
+   *  du corps. Quelques nuages/cratères semi-transparents suffisent à donner
+   *  une surface sans texture bitmap ni coût par frame. */
+  function paintSphereVolume(g, cx, cy, R, b, detail) {
+    const light = b.light || 0;
+    const lx = cx + Math.cos(light) * R * 0.48;
+    const ly = cy + Math.sin(light) * R * 0.48;
+    const lit = PALETTE.mix('#111522', b.glow2 || b.glow, detail === 'volcanic' ? 0.72 : 0.55);
+    const mid = PALETTE.mix('#080b14', b.glow, 0.38);
+    const grad = g.createRadialGradient(lx, ly, R * 0.04, cx, cy, R * 1.12);
+    grad.addColorStop(0, PALETTE.lighten(lit, 0.30));
+    grad.addColorStop(0.30, lit);
+    grad.addColorStop(0.67, mid);
+    grad.addColorStop(1, '#010207');
+
+    g.save();
+    g.beginPath(); g.arc(cx, cy, R, 0, TAU); g.clip();
+    g.fillStyle = grad; g.fillRect(cx - R, cy - R, R * 2, R * 2);
+
+    const marks = detail === 'gas' ? 18 : detail === 'ocean' ? 14 : 24;
+    for (let i = 0; i < marks; i++) {
+      const a = rnd(0, TAU), rr = Math.sqrt(Math.random()) * R * 0.82;
+      const x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+      const rx = R * rnd(0.025, detail === 'gas' ? 0.22 : 0.10);
+      const ry = rx * rnd(detail === 'gas' ? 0.12 : 0.38, detail === 'gas' ? 0.28 : 0.72);
+      g.fillStyle = PALETTE.rgba(i % 3 === 0 ? (b.glow2 || b.glow) : '#02030a', rnd(0.035, 0.12));
+      g.beginPath();
+      if (g.ellipse) g.ellipse(x, y, rx, ry, rnd(-0.5, 0.5), 0, TAU);
+      else g.arc(x, y, Math.max(1, ry), 0, TAU);
+      g.fill();
+    }
+    g.restore();
+  }
+
   /* --- planète « classique » : ringed / gas / ice / volcanic / ocean ------ */
   function drawSphereWorld(g, cx, cy, R, b) {
     const col = tri(b.glow, b.core);
@@ -595,6 +631,7 @@ const BACKDROP = (function () {
 
     drawRings(g, cx, cy, R, col2, b, false);
     if (b.rings) punchDisc(g, cx, cy, R * 0.995);
+    paintSphereVolume(g, cx, cy, R, b, b.kind);
 
     // Limbe COMPLET, sourd mais lisible : c'est lui qui dit « sphère ». Trop
     // faible (il l'était), on ne lisait plus qu'un croissant, et la planète
@@ -698,12 +735,32 @@ const BACKDROP = (function () {
     const hot = tri(b.glow2 || b.glow, b.core);
     const tilt = b.tilt || 0.30;
 
+    // Disque d'accrétion continu : matière chaude et dense, pas seulement deux
+    // contours lumineux. Tout est pré-rendu, le flou ne coûte rien en jeu.
+    g.save();
+    g.translate(cx, cy); g.rotate(-0.12); g.scale(1, tilt);
+    const acc = g.createRadialGradient(0, 0, R * 0.62, 0, 0, R * 2.18);
+    acc.addColorStop(0.00, PALETTE.rgba(b.glow2 || b.glow, 0));
+    acc.addColorStop(0.18, PALETTE.rgba(b.core, 0.88));
+    acc.addColorStop(0.34, PALETTE.rgba(b.glow2 || b.glow, 0.72));
+    acc.addColorStop(0.62, PALETTE.rgba(b.glow, 0.28));
+    acc.addColorStop(1.00, PALETTE.rgba(b.glow, 0));
+    g.fillStyle = acc; g.beginPath(); g.arc(0, 0, R * 2.18, 0, TAU); g.fill();
+    g.restore();
+
     // disque d'accrétion : moitié arrière, puis on découpe le trou, puis l'avant
     NEON.polyline(g, ellipsePts(cx, cy, R * 2.05, R * 2.05 * tilt, -0.12, Math.PI, TAU, 48),
                   hot, 2.6, { alpha: 0.45, passes: 4 });
     NEON.polyline(g, ellipsePts(cx, cy, R * 1.55, R * 1.55 * tilt, -0.12, Math.PI, TAU, 44),
                   col, 1.8, { alpha: 0.32, passes: 3 });
     punchDisc(g, cx, cy, R * 0.98);
+    g.save();
+    const voidGrad = g.createRadialGradient(cx - R * 0.12, cy - R * 0.12, 0, cx, cy, R);
+    voidGrad.addColorStop(0, '#000000');
+    voidGrad.addColorStop(0.72, '#000000');
+    voidGrad.addColorStop(1, PALETTE.rgba(b.glow, 0.16));
+    g.fillStyle = voidGrad; g.beginPath(); g.arc(cx, cy, R * 0.98, 0, TAU); g.fill();
+    g.restore();
 
     // lentille gravitationnelle : deux arcs verticaux au-dessus/au-dessous
     NEON.polyline(g, ellipsePts(cx, cy, R * 1.30, R * 1.85, 0, -2.55, -0.60, 28),
@@ -745,6 +802,13 @@ const BACKDROP = (function () {
     const suns = [{ x: xa, y: ya, r: R, c: A }, { x: xb, y: yb, r: rb, c: B }];
     for (let s = 0; s < suns.length; s++) {
       const u = suns[s];
+      const disc = g.createRadialGradient(u.x - u.r * 0.24, u.y - u.r * 0.28, 0,
+        u.x, u.y, u.r);
+      disc.addColorStop(0, '#fffdf0');
+      disc.addColorStop(0.22, PALETTE.lighten(u.c.glow, 0.68));
+      disc.addColorStop(0.70, u.c.glow);
+      disc.addColorStop(1, PALETTE.darken(u.c.glow, 0.30));
+      g.fillStyle = disc; g.beginPath(); g.arc(u.x, u.y, u.r, 0, TAU); g.fill();
       const glow = g.createRadialGradient(u.x, u.y, 0, u.x, u.y, u.r * 1.45);
       glow.addColorStop(0.00, PALETTE.rgba(u.c.core, 0.62));
       glow.addColorStop(0.42, PALETTE.rgba(u.c.glow, 0.34));
@@ -777,6 +841,7 @@ const BACKDROP = (function () {
     for (let i = 0; i < bodies.length; i++) {
       const u = bodies[i];
       const cr = crescent(u.x, u.y, u.r, b.light, u.q);
+      paintSphereVolume(g, u.x, u.y, u.r, b, 'moon');
       NEON.circle(g, u.x, u.y, u.r, u.c, 0.9, { alpha: 0.18, passes: 3 });
       g.save();
       g.clip(litPath(cr));
@@ -800,6 +865,7 @@ const BACKDROP = (function () {
     const col = tri(b.glow, b.core);
     const col2 = tri(b.glow2 || b.glow, b.core);
     const n = b.facets || 9;
+    paintSphereVolume(g, cx, cy, R * 0.94, b, 'crystal');
     const outer = [];
     for (let i = 0; i < n; i++) {
       const a = TAU * i / n - Math.PI / 2;
@@ -838,6 +904,7 @@ const BACKDROP = (function () {
     const col = tri(b.glow, b.core);
     const col2 = tri(b.glow2 || b.glow, b.core);
     const cr = crescent(cx, cy, R, b.light, b.phase);
+    paintSphereVolume(g, cx, cy, R * 0.94, b, 'shattered');
 
     // le limbe est fracturé : des arcs séparés, décalés vers l'extérieur
     let a = 0;
@@ -1693,6 +1760,7 @@ const BACKDROP = (function () {
     S.fade = 0;
     S.fading = true;
     S.sigSwap = true;             // les particules s'effacent puis renaissent
+    S.travelY = 0;                // nouveau secteur : nouveau passage céleste
     S.version++;                  // stars.js reconstruira ses couches teintées
     S.pending.length = 0;
     queueRebuild('neb');
@@ -1759,15 +1827,17 @@ const BACKDROP = (function () {
 
     updatePulses(dt);
 
-    // --- position du corps : dérive lente, jamais de bouclage brutal --------
+    // --- voyage vertical : tous les plans suivent la même direction, mais à
+    //     des vitesses différentes pour conserver l'échelle du décor. --------
+    S.travelY += (6 + S.intensity * 9) * dt * (REDUCED_MOTION ? 0.20 : 1);
     if (S.body) {
       const b = S.theme.body;
       BODY_POS.x = b.x * S.w + Math.sin(S.t * 0.0211 + 1.3) * S.w * 0.035;
-      BODY_POS.y = b.y * S.h + Math.sin(S.t * 0.0349) * S.h * 0.10;
+      BODY_POS.y = b.y * S.h + S.travelY + Math.sin(S.t * 0.0349) * S.h * 0.045;
       BODY_POS.r = S.body.R;
     } else {
       BODY_POS.x = S.theme.body.x * S.w;
-      BODY_POS.y = S.theme.body.y * S.h;
+      BODY_POS.y = S.theme.body.y * S.h + S.travelY;
       BODY_POS.r = Math.min(S.w, S.h) * S.theme.body.scale;
     }
     S.moonT += dt;
@@ -1911,6 +1981,83 @@ const BACKDROP = (function () {
 
   /** Couches PROCHES : planète, lunes, particules, événements, voiles réactifs.
    *  À dessiner PAR-DESSUS les couches d'étoiles (la planète les occulte). */
+  function drawSectorLandmark(c, w, h, skyDim) {
+    if (typeof gameState === 'undefined' || gameState !== 'playing') return;
+    const stage = (typeof stageSystem !== 'undefined' && stageSystem.currentStage) || 1;
+    const runtime = typeof window !== 'undefined' ? window.GALABOB : null;
+    const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+    const assault = mode && mode.id === 'assault';
+    const kind = (stage - 1) % 4;
+    const b = S.theme.body;
+    const col = tri(b.glow2 || b.glow, b.core);
+    const dim = tri(b.glow, b.core);
+    const alpha = (assault ? 0.28 : 0.18) * skyDim * S.fade;
+    const drift = Math.sin(S.t * 0.10 + stage) * Math.min(w, h) * 0.008;
+    const travel = S.travelY * 1.7;
+
+    if (kind === 0) {
+      // Porte de saut monumentale, volontairement coupée par le bord du cadre.
+      const side = stage % 8 < 4 ? -1 : 1;
+      const x = side < 0 ? -w * 0.03 : w * 1.03;
+      const y = h * 0.40 + drift + travel;
+      const r = Math.min(w, h) * 0.43;
+      NEON.polyline(c, ellipsePts(x, y, r, r * 0.72, -0.12, -2.15, 2.15, 54),
+        col, 3.0, { alpha: alpha, passes: 3, cap: 'butt' });
+      NEON.polyline(c, ellipsePts(x, y, r * 0.82, r * 0.58, -0.12, -2.05, 2.05, 48),
+        dim, 1.3, { alpha: alpha * 0.62, dash: [12, 18], dashOffset: S.t * 16, passes: 2 });
+      for (let i = -2; i <= 2; i++) {
+        const a = i * 0.43;
+        NEON.line(c, x + Math.cos(a) * r * 0.83, y + Math.sin(a) * r * 0.60,
+          x + Math.cos(a) * r, y + Math.sin(a) * r * 0.72,
+          col, 1.2, { alpha: alpha * 0.65, passes: 2 });
+      }
+    } else if (kind === 1) {
+      // Épave de porte-vaisseaux : une grande masse horizontale, pas un décor de points.
+      const x = w * 0.13 + drift, y = h * 0.22 + travel;
+      const L = w * 0.66, T = Math.min(w, h) * 0.10;
+      const hull = [
+        { x: x, y: y }, { x: x + L * 0.18, y: y - T * 0.60 },
+        { x: x + L * 0.78, y: y - T * 0.28 }, { x: x + L, y: y + T * 0.06 },
+        { x: x + L * 0.72, y: y + T * 0.32 }, { x: x + L * 0.22, y: y + T * 0.48 },
+        { x: x, y: y }
+      ];
+      NEON.polyline(c, hull, dim, 2.2, { alpha: alpha * 0.80, passes: 3 });
+      for (let i = 1; i < 6; i++) {
+        const px = x + L * (0.12 + i * 0.12);
+        NEON.line(c, px, y - T * 0.34, px + L * 0.04, y + T * 0.36,
+          col, 1, { alpha: alpha * (i % 2 ? 0.70 : 0.34), passes: 2 });
+      }
+      NEON.line(c, x + L * 0.42, y - T * 0.42, x + L * 0.48, y - T * 1.12,
+        col, 1.4, { alpha: alpha * 0.72, passes: 2 });
+    } else if (kind === 2) {
+      // Citadelle orbitale : silhouette verticale et noyau pulsant.
+      const x = w * 0.82 + drift, y = h * 0.30 + travel;
+      const r = Math.min(w, h) * 0.17;
+      const spin = S.t * 0.035;
+      NEON.polyline(c, ellipsePts(x, y, r * 1.55, r * 0.42, spin, 0, TAU, 42),
+        dim, 1.5, { alpha: alpha * 0.62, dash: [10, 12], dashOffset: -S.t * 10, passes: 2 });
+      NEON.line(c, x, y - r * 1.45, x, y + r * 1.45, col, 2.2,
+        { alpha: alpha * 0.86, passes: 3 });
+      NEON.line(c, x - r * 0.72, y, x + r * 0.72, y, dim, 1.2,
+        { alpha: alpha * 0.65, passes: 2 });
+      NEON.ring(c, x, y, r * 0.30, 2, col,
+        { alpha: alpha * (0.72 + Math.sin(S.t * 1.4) * 0.18), passes: 3 });
+      NEON.dot(c, x, y, r * 0.055, col, { alpha: alpha * 1.8 });
+    } else {
+      // Rail orbital diagonal : il donne une profondeur et une direction au champ.
+      const x1 = -w * 0.08, y1 = h * 0.18 + drift + travel;
+      const x2 = w * 0.68, y2 = h * 0.04 + drift + travel;
+      NEON.line(c, x1, y1, x2, y2, dim, 3.2, { alpha: alpha * 0.66, passes: 3 });
+      NEON.line(c, x1, y1 + 18, x2, y2 + 18, col, 1.2, { alpha: alpha * 0.72, passes: 2 });
+      for (let i = 1; i < 9; i++) {
+        const t = i / 9;
+        const x = x1 + (x2 - x1) * t, y = y1 + (y2 - y1) * t;
+        NEON.line(c, x, y - 18, x + 4, y + 35, i % 3 === 0 ? col : dim, 1,
+          { alpha: alpha * (i % 3 === 0 ? 0.85 : 0.38), passes: 2 });
+      }
+    }
+  }
+
   function drawFront(c) {
     if (!c || !ensure()) return;
     if (S.frameFront === FRAME.frame) return;
@@ -1923,6 +2070,9 @@ const BACKDROP = (function () {
 
     /* --- lunes DERRIÈRE le corps ------------------------------------------ */
     drawMoons(c, b, false, skyDim);
+
+    /* --- repère monumental du secteur, derrière le corps céleste ---------- */
+    drawSectorLandmark(c, w, h, skyDim);
 
     /* --- occultation : la planète découpe les étoiles. C'est cette silhouette
      *     franche qui donne l'échelle — un disque lumineux, lui, ferait tache. */
@@ -2155,6 +2305,7 @@ const BACKDROP = (function () {
       S.intensityHold = 0;
       S.dangerHold = 0;
       S.nextEvent = rnd(6, 12);
+      S.travelY = 0;
       S.autoStage = -1;
       S.manual = false;
     }

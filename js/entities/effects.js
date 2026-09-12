@@ -44,7 +44,8 @@ let explosions = [];    // flashes + ondes + étincelles + résidus (tout le feu
 let debris = [];        // éclats vectoriels de carlingue
 let scorePopups = [];   // chiffres qui montent
 
-// Combo : déclarés ici historiquement, pilotés par game.js.
+// Combo : déclarés ici historiquement, pilotés par game.js. `comboTimer`
+// contient désormais les millisecondes de temps de JEU restantes.
 let comboTimer = 0;
 let comboCount = 0;
 

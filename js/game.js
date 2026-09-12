@@ -11,12 +11,83 @@
  * ========================================================================== */
 
 // Variables d'état du jeu
-let gameState = "menu";     // "menu" | "playing" | "gameover" | "settings"
+let gameState = "menu";     // "menu" | "playing" | "shop" | "gameover" | "settings"
 let isPaused = false;       // pause demandée par le joueur (touche P)
 let autoPaused = false;     // pause automatique (onglet caché / perte de focus)
+let assaultShopFireArmed = true; // exige un relâchement après le dernier kill
 
 // Minuterie de fin de stage (en ms de temps de jeu, remplace un setTimeout)
 let pendingTransitionMs = -1;
+let environmentalHazardTimer = 16000;
+
+/* -----------------------------------------------------------------------------
+ *  RUNTIME MODERNE — pont temporaire pendant la migration des scripts globaux
+ * -------------------------------------------------------------------------- */
+function _runtime() {
+  return (typeof window !== 'undefined' && window.GALABOB) ? window.GALABOB : null;
+}
+
+function _combo() {
+  const runtime = _runtime();
+  return runtime && runtime.combo ? runtime.combo : null;
+}
+
+function _gameRandom() {
+  const runtime = _runtime();
+  return runtime && runtime.random ? runtime.random.next() : Math.random();
+}
+
+function _enforceEntityBudgets() {
+  const runtime = _runtime();
+  if (!runtime || !runtime.entityBudget) return;
+  const budget = runtime.entityBudget;
+  budget.enforce('explosions', explosions);
+  budget.enforce('powerUps', powerUps);
+  if (typeof debris !== 'undefined') budget.enforce('debris', debris);
+  if (typeof scorePopups !== 'undefined') budget.enforce('scorePopups', scorePopups);
+  if (typeof powerUpPickups !== 'undefined') budget.enforce('powerUpPickups', powerUpPickups);
+  if (typeof multiplierSparks !== 'undefined') budget.enforce('multiplierSparks', multiplierSparks);
+  if (typeof bombWaves !== 'undefined') budget.enforce('bombWaves', bombWaves);
+}
+
+function _randomPowerUpsEnabled() {
+  const runtime = _runtime();
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  return !mode || mode.randomPowerUps !== false;
+}
+
+function _syncLegacyCombo(tracker) {
+  if (!tracker) return;
+  comboCount = tracker.count;
+  comboTimer = tracker.remainingMs;
+}
+
+function _modeCall(hook, payload) {
+  const runtime = _runtime();
+  if (!runtime || !runtime.modes) return undefined;
+  try {
+    return runtime.modes.call(hook, payload);
+  } catch (error) {
+    console.error('Mode de jeu, hook ' + hook + ' :', error);
+    return undefined;
+  }
+}
+
+function _selectedShip() {
+  const runtime = _runtime();
+  if (!runtime || !runtime.ships || !runtime.profile) return null;
+  return runtime.ships.get(runtime.profile.data.selectedShip);
+}
+
+function _applySelectedShip() {
+  const ship = _selectedShip();
+  player.shipId = ship ? ship.id : 'classic';
+  player.shipStats = ship ? ship.stats : {
+    speedMultiplier: 1,
+    fireRateMultiplier: 1,
+    hitboxMultiplier: 1
+  };
+}
 
 /* -----------------------------------------------------------------------------
  *  PONT ÉVÉNEMENTIEL — bruitages
@@ -49,6 +120,16 @@ function saveHighScore() {
     if (score > highScore) highScore = score;
     localStorage.setItem('highScore', String(highScore));
   } catch (e) { /* localStorage indisponible */ }
+
+  const runtime = _runtime();
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  if (runtime && runtime.profile && mode) {
+    const saved = runtime.profile.mode(mode.id) || {};
+    runtime.profile.updateMode(mode.id, {
+      ...saved,
+      highScore: Math.max(Number(saved.highScore) || 0, Number(highScore) || 0)
+    });
+  }
 }
 
 /* -----------------------------------------------------------------------------
@@ -80,7 +161,10 @@ function applyTempoToLegacyModules() {
 const _playerHitbox = { x: 0, y: 0, width: TEMPO.PLAYER_HITBOX, height: TEMPO.PLAYER_HITBOX };
 
 function getPlayerHitbox() {
-  const s = TEMPO.PLAYER_HITBOX;
+  const hitboxMultiplier = player && player.shipStats
+    ? Number(player.shipStats.hitboxMultiplier) || 1
+    : 1;
+  const s = TEMPO.PLAYER_HITBOX * hitboxMultiplier;
   _playerHitbox.width = s;
   _playerHitbox.height = s;
   _playerHitbox.x = player.x + player.width / 2 - s / 2;
@@ -90,6 +174,8 @@ function getPlayerHitbox() {
 
 /** Remet le joueur dans un état propre (nouvelle partie / respawn). */
 function resetPlayerState(fullReset) {
+  player.vx = 0;
+  player.vy = 0;
   player.invulnerable = false;
   player.iframeTimer = 0;
   player.iframeDuration = TEMPO.PLAYER_IFRAME_MS;
@@ -142,10 +228,22 @@ function updatePlayerState(dtMs) {
  * -------------------------------------------------------------------------- */
 function initGame() {
   saveHighScore();
+  assaultShopFireArmed = true;
+
+  const runtime = _runtime();
+  const runSeed = runtime && typeof runtime.newRunSeed === 'function'
+    ? runtime.newRunSeed()
+    : null;
 
   score = 0;
-  comboCount = 0;
-  comboTimer = 0;
+  const combo = _combo();
+  if (combo) {
+    combo.reset();
+    _syncLegacyCombo(combo);
+  } else {
+    comboCount = 0;
+    comboTimer = 0;
+  }
 
   enemySpeed = 1;
   enemyDirection = 1;
@@ -162,6 +260,7 @@ function initGame() {
     player.weaponLevel = 1;
   }
   player.fireCooldown = 0;
+  _applySelectedShip();
   resetPlayerState(true);
 
   playerBullets = [];
@@ -175,6 +274,7 @@ function initGame() {
   if (typeof scorePopups !== 'undefined') scorePopups = [];
 
   pendingTransitionMs = -1;
+  environmentalHazardTimer = 16000;
   lastReinforcementAt = -1e9;
   isPaused = false;
   autoPaused = false;
@@ -203,6 +303,17 @@ function initGame() {
   gameState = "playing";
   updatePlayerSpeed();
 
+  _modeCall('startRun', {
+    stage: stageSystem.currentStage,
+    loop: stageSystem.loopCount,
+    seed: runSeed
+  });
+  _modeCall('startStage', {
+    stage: stageSystem.currentStage,
+    loop: stageSystem.loopCount,
+    boss: stageSystem.isBossStage()
+  });
+
   JUICE.preset('stageStart');
   gameEvent('gameStart', {});
   gameEvent('stageStart', { stage: stageSystem.currentStage });
@@ -215,9 +326,10 @@ function updatePlayerSpeed() {
     1 + (score * TEMPO.PLAYER_SPEED_SCORE_STEP),
     TEMPO.PLAYER_SPEED_MAX_MULT
   );
+  const shipMult = player.shipStats ? Number(player.shipStats.speedMultiplier) || 1 : 1;
   player.speed = player.usesPxPerSecond
-    ? TEMPO.PLAYER_SPEED * mult
-    : (TEMPO.PLAYER_SPEED / 60) * mult;
+    ? TEMPO.PLAYER_SPEED * mult * shipMult
+    : (TEMPO.PLAYER_SPEED / 60) * mult * shipMult;
 }
 
 /* -----------------------------------------------------------------------------
@@ -251,6 +363,25 @@ function update(deltaTime) {
       }
     }
 
+    if (gameState === "shop") {
+      if (deltaTime === 0) return;
+      if (!assaultShopFireArmed && typeof INPUT !== 'undefined' && !INPUT.shoot()) {
+        assaultShopFireArmed = true;
+      }
+      updatePlayerSpeed();
+      updatePlayerState(deltaTime);
+      updatePlayer(deltaTime);
+      updatePlayerBullets(deltaTime);
+      _modeCall('updateShop', deltaTime);
+      if (typeof updateAssaultShopRoom === 'function') updateAssaultShopRoom(deltaTime);
+      updateExplosions(deltaTime);
+      if (typeof updateDebris === 'function') updateDebris(deltaTime);
+      if (typeof updateScorePopups === 'function') updateScorePopups(deltaTime);
+      if (typeof updateStars === 'function') updateStars(deltaTime);
+      _enforceEntityBudgets();
+      return;
+    }
+
     if (gameState !== "playing" || isPaused) return;
     if (deltaTime === 0) return;   // hitstop : la logique est gelée
 
@@ -269,6 +400,20 @@ function update(deltaTime) {
     updateEnemyBullets(enemyDt);
     updateEnemies(enemyDt);
 
+    // Obstacles rares, jamais pendant les deux stages d'apprentissage ni un boss.
+    if (stageSystem.currentStage >= 3 &&
+        !(typeof BOSS !== 'undefined' && BOSS.isActive && BOSS.isActive())) {
+      environmentalHazardTimer -= enemyDt;
+      if (environmentalHazardTimer <= 0 && typeof spawnAsteroidHazard === 'function') {
+        const amount = stageSystem.currentStage >= 12 && _gameRandom() < 0.35 ? 2 : 1;
+        if (spawnAsteroidHazard(amount)) {
+          environmentalHazardTimer = 26000 + _gameRandom() * 16000;
+        } else {
+          environmentalHazardTimer = 4000;
+        }
+      }
+    }
+
     // BOSS — attend des SECONDES. Le ralenti s'applique à lui comme au reste
     // de la menace. dt nul (hitstop) : le module gèle sa logique tout seul.
     if (typeof BOSS !== 'undefined' && BOSS.isActive && BOSS.isActive()) {
@@ -281,11 +426,20 @@ function update(deltaTime) {
     if (typeof updateDebris === 'function') updateDebris(deltaTime);
     if (typeof updateScorePopups === 'function') updateScorePopups(deltaTime);
     if (typeof updateStars === 'function') updateStars(deltaTime);
+    _enforceEntityBudgets();
 
-    // Expiration du combo
-    if (comboCount > 0 && Date.now() - comboTimer > TEMPO.COMBO_WINDOW_MS) {
-      comboCount = 0;
+    // Expiration du combo : temps de JEU uniquement. Un hitstop ou une pause
+    // fournit un delta nul et ne consomme donc plus la chaine.
+    const combo = _combo();
+    if (combo) {
+      combo.step(deltaTime);
+      _syncLegacyCombo(combo);
+    } else if (comboCount > 0) {
+      comboTimer = Math.max(0, comboTimer - deltaTime);
+      if (comboTimer === 0) comboCount = 0;
     }
+
+    _modeCall('update', deltaTime);
 
     processGameLogic();
   } catch (e) {
@@ -340,15 +494,32 @@ function killEnemyAt(index, cause) {
   const cy = e.y + e.height / 2;
   const type = e.type || 'normal';
 
-  // --- COMBO : compte les KILLS, jamais les impacts de balle ---------------
-  const now = Date.now();
-  if (comboCount > 0 && now - comboTimer < TEMPO.COMBO_WINDOW_MS) {
-    comboCount++;
-    if (comboCount > 1) gameEvent('comboUp', { combo: comboCount });
-  } else {
-    comboCount = 1;
+  // Les obstacles appartiennent au décor jouable : aucun score, crédit, combo,
+  // drop ni avancement de stage quand le joueur en brise un.
+  if (e.isHazard) {
+    if (typeof createExplosion === 'function') {
+      try { createExplosion(cx, cy, 'asteroid', { scale: 1.35 }); } catch (err) { /* décor non bloquant */ }
+    }
+    if (typeof createDebris === 'function') {
+      try { createDebris(cx, cy, PALETTE.enemy('asteroid').burst, 'asteroid'); } catch (err) { /* ignoré */ }
+    }
+    if (typeof BACKDROP !== 'undefined') {
+      try { BACKDROP.pulse(PALETTE.enemy('asteroid').burst, 0.55, cx, cy); } catch (err) { /* ignoré */ }
+    }
+    enemies.splice(index, 1);
+    return 0;
   }
-  comboTimer = now;
+
+  // --- COMBO : compte les KILLS, jamais les impacts de balle ---------------
+  const combo = _combo();
+  if (combo) {
+    comboCount = combo.registerKill();
+    comboTimer = combo.remainingMs;
+  } else {
+    comboCount = comboCount > 0 && comboTimer > 0 ? comboCount + 1 : 1;
+    comboTimer = TEMPO.COMBO_WINDOW_MS;
+  }
+  if (comboCount > 1) gameEvent('comboUp', { combo: comboCount });
 
   const multiplier = Math.min(comboCount, TEMPO.COMBO_MAX);
   const basePoints = (typeof e.points === 'number' && e.points > 0)
@@ -358,12 +529,29 @@ function killEnemyAt(index, cause) {
   const scoreMult = (typeof playerScoreMultiplier === 'function') ? playerScoreMultiplier() : 1;
   const points = basePoints * multiplier * scoreMult;
 
+  const modeReward = e.isBonus
+    ? _modeCall('bonusEnemyKilled', {
+        type: type, cause: cause, basePoints: basePoints, points: points,
+        roll: _gameRandom(), pick: _gameRandom()
+      })
+    : _modeCall('enemyKilled', {
+        type: type, cause: cause, basePoints: basePoints, points: points
+      });
+
   score += points;
   if (stageSystem.stageStats) {
     stageSystem.stageStats.score += points;
     if (comboCount > stageSystem.stageStats.combo) stageSystem.stageStats.combo = comboCount;
   }
-  stageSystem.enemiesDefeated++;
+  if (!e.isBonus && !e.isHazard) stageSystem.enemiesDefeated++;
+
+  if (modeReward && modeReward.credits > 0 && typeof scorePopups !== 'undefined') {
+    scorePopups.push({
+      x: cx + 34, y: e.y + 28, points: 0,
+      text: '+' + modeReward.credits + ' CR', lifetime: 1.15, dy: -0.85,
+      color: 'combo'
+    });
+  }
 
   // --- Effets ---------------------------------------------------------------
   // createScorePopup reçoit les points de BASE et le multiplicateur : c'est lui
@@ -371,8 +559,9 @@ function killEnemyAt(index, cause) {
   if (typeof createScorePopup === 'function') {
     try { createScorePopup(cx, e.y, basePoints, multiplier); } catch (err) { /* ignoré */ }
   }
+  const enemyTriplet = e.isBonus ? PALETTE.get('#ffee55') : PALETTE.enemy(type);
   if (typeof createDebris === 'function') {
-    try { createDebris(cx, cy, PALETTE.enemy(type).burst, type); } catch (err) { /* ignoré */ }
+    try { createDebris(cx, cy, enemyTriplet.burst, type); } catch (err) { /* ignoré */ }
   }
   if (typeof createExplosion === 'function') {
     // L'ampleur suit l'IMPORTANCE du kill, pas seulement le type d'ennemi.
@@ -383,7 +572,7 @@ function killEnemyAt(index, cause) {
   // --- Le CIEL réagit : une onde de couleur part de l'explosion -------------
   if (typeof BACKDROP !== 'undefined') {
     const onde = (cause === 'ram') ? 0.85 : Math.min(0.9, 0.40 + multiplier * 0.06);
-    try { BACKDROP.pulse(PALETTE.enemy(type).burst, onde, cx, cy); }
+    try { BACKDROP.pulse(enemyTriplet.burst, onde, cx, cy); }
     catch (err) { /* le fond ne casse jamais une frame */ }
   }
 
@@ -399,7 +588,15 @@ function killEnemyAt(index, cause) {
   }
 
   // --- Butin ----------------------------------------------------------------
-  if (Math.random() < TEMPO.POWERUP_DROP_CHANCE && typeof createPowerUp === 'function') {
+  const customDrop = e.isBonus
+    ? (modeReward && modeReward.powerUp)
+    : _modeCall('rollEnemyDrop', { enemy: e, roll: _gameRandom(), pick: _gameRandom() });
+  if (customDrop && typeof createPowerUp === 'function') {
+    try {
+      powerUps.push(createPowerUp(cx - 10, e.y, customDrop));
+    } catch (err) { /* ignoré */ }
+  } else if (!e.isBonus && customDrop === undefined && _randomPowerUpsEnabled() &&
+      _gameRandom() < TEMPO.POWERUP_DROP_CHANCE && typeof createPowerUp === 'function') {
     try {
       powerUps.push(createPowerUp(cx - 10, e.y));
     } catch (err) { /* ignoré */ }
@@ -441,7 +638,14 @@ function damagePlayer(source) {
     try { createDebris(cx, cy, PALETTE.get('player').burst, 'player'); } catch (e) { /* ignoré */ }
   }
 
-  comboCount = 0;
+  const combo = _combo();
+  if (combo) {
+    combo.reset();
+    _syncLegacyCombo(combo);
+  } else {
+    comboCount = 0;
+    comboTimer = 0;
+  }
 
   if (player.lives <= 0) {
     JUICE.preset('playerDeath');
@@ -471,6 +675,11 @@ function triggerGameOver() {
   JUICE.preset('gameOver');
   if (typeof BOSS !== 'undefined') { try { BOSS.reset(); } catch (e) { /* ignoré */ } }
   if (typeof BACKDROP !== 'undefined') { try { BACKDROP.reset(); } catch (e) { /* ignoré */ } }
+  _modeCall('endRun', {
+    score: score,
+    stage: stageSystem.currentStage,
+    loop: stageSystem.loopCount
+  });
   gameEvent('gameOver', { score: score, stage: stageSystem.currentStage });
 }
 
@@ -588,6 +797,32 @@ function handleStageCompletion() {
 
     JUICE.preset('stageClear');
     gameEvent('stageClear', { stage: stageSystem.currentStage });
+    const modeResult = _modeCall('completeStage', {
+      stage: stageSystem.currentStage,
+      loop: stageSystem.loopCount,
+      score: score
+    });
+    const runtime = _runtime();
+    const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+    if (runtime && runtime.profile && mode) {
+      const saved = runtime.profile.mode(mode.id) || {};
+      runtime.profile.updateMode(mode.id, {
+        ...saved,
+        highestStage: Math.max(Number(saved.highestStage) || 1, stageSystem.currentStage)
+      });
+    }
+
+    if (modeResult && modeResult.openShop) {
+      playerBullets.length = 0;
+      if (typeof playerSpecialShots !== 'undefined' && playerSpecialShots) playerSpecialShots.length = 0;
+      gameState = 'shop';
+      assaultShopFireArmed = false;
+      // La salle d'arsenal est un niveau jouable : le temps, le pilotage et les
+      // projectiles continuent. Seule la menace de combat est absente.
+      isPaused = false;
+      pendingTransitionMs = -1;
+      return;
+    }
 
     // Minuterie en temps de JEU, pas un setTimeout : plus de dérive au retour d'onglet.
     pendingTransitionMs = TEMPO.STAGE_COMPLETE_DELAY_MS;
@@ -616,7 +851,7 @@ function handleNewWave() {
   try {
     let alive = 0;
     for (let i = 0; i < enemies.length; i++) {
-      if (enemies[i] && !enemies[i].isDeleted) alive++;
+      if (enemies[i] && !enemies[i].isDeleted && !enemies[i].isBonus && !enemies[i].isHazard) alive++;
     }
 
     const enemiesLeft = stageSystem.enemiesPerStage - stageSystem.enemiesDefeated;
@@ -659,8 +894,21 @@ function handleNewWave() {
     const waveSize = Math.max(1, desired - alive);
     const formations = Object.values(FORMATIONS);
     const choreographies = Object.values(ENTRY_CHOREOGRAPHIES);
-    const randomFormation = formations[Math.floor(Math.random() * formations.length)];
-    const randomChoreography = choreographies[Math.floor(Math.random() * choreographies.length)];
+    let randomFormation = formations[Math.floor(_gameRandom() * formations.length)];
+    let randomChoreography = choreographies[Math.floor(_gameRandom() * choreographies.length)];
+
+    // Dans une campagne scénarisée, les renforts gardent le langage visuel du
+    // secteur courant. Les formes changent au secteur suivant, pas au hasard
+    // au milieu d'une bataille déjà lisible.
+    const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+    const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+    const progression = mode && mode.progression;
+    if (progression && progression.rules && progression.rules.scriptedCompositions) {
+      const index = Math.max(0, stageSystem.currentStage - 1) % progression.compositions.length;
+      const composition = progression.compositions[index];
+      randomFormation = composition.f;
+      randomChoreography = composition.c;
+    }
 
     try {
       createFormation(waveSize, randomFormation, randomChoreography, stageSystem.currentStage, !empty);
@@ -668,7 +916,7 @@ function handleNewWave() {
       console.error("Erreur lors de la création d'une vague, repli simple :", e);
       for (let i = 0; i < waveSize; i++) {
         enemies.push({
-          x: Math.random() * Math.max(1, CANVAS_WIDTH - 60) + 30,
+          x: _gameRandom() * Math.max(1, CANVAS_WIDTH - 60) + 30,
           y: -60 - i * 34,
           width: 46,
           height: 46,
@@ -693,12 +941,23 @@ function handleNewWave() {
 
 /** Un boss vaincu lâche trois bonus : c'est la récompense du combat long. */
 function lacherButinDeBoss() {
+  if (!_randomPowerUpsEnabled()) return;
   if (typeof createPowerUp !== 'function' || typeof powerUps === 'undefined') return;
   for (let k = 0; k < 3; k++) {
     try {
       powerUps.push(createPowerUp(CANVAS_WIDTH / 2 - 10 + (k - 1) * 70, CANVAS_HEIGHT * 0.35));
     } catch (err) { /* ignoré */ }
   }
+}
+
+function continueAfterAssaultShop() {
+  const runtime = _runtime();
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  if (!mode || mode.id !== 'assault') return;
+  if (typeof mode.closeShop === 'function') mode.closeShop();
+  gameState = 'playing';
+  isPaused = false;
+  stageSystem.startTransition();
 }
 
 /** Dernier recours si le système de stages part en vrille : on repart proprement
@@ -726,7 +985,7 @@ function softResetStage() {
  *  CYCLE DE VIE — appelé par main.js (visibilitychange / blur / focus)
  * -------------------------------------------------------------------------- */
 function pauseForVisibility() {
-  if (gameState === 'playing' && !isPaused) {
+  if ((gameState === 'playing' || gameState === 'shop') && !isPaused) {
     isPaused = true;
     autoPaused = true;
   }
@@ -798,6 +1057,11 @@ function drawScene() {
     if (typeof drawStars === 'function') drawStars();
   } catch (e) {
     console.error("Erreur lors du dessin des étoiles :", e);
+  }
+
+  if (gameState === "shop") {
+    try { drawAssaultShop(); } catch (e) { console.error("Erreur drawAssaultShop :", e); }
+    return;
   }
 
   // --- menus ---------------------------------------------------------------
@@ -873,14 +1137,16 @@ function drawScene() {
 
 /** Multiplicateur de combo courant (1 .. TEMPO.COMBO_MAX). Pour le HUD. */
 function getComboMultiplier() {
-  return Math.max(1, Math.min(comboCount || 1, TEMPO.COMBO_MAX));
+  const combo = _combo();
+  return combo ? combo.multiplier() : Math.max(1, Math.min(comboCount || 1, TEMPO.COMBO_MAX));
 }
 
 /** Fraction de temps restant sur le combo courant, 0 → 1. Pour une jauge HUD. */
 function getComboFraction() {
+  const combo = _combo();
+  if (combo) return combo.fraction();
   if (!comboCount) return 0;
-  const left = TEMPO.COMBO_WINDOW_MS - (Date.now() - comboTimer);
-  return clamp(left / TEMPO.COMBO_WINDOW_MS, 0, 1);
+  return clamp(comboTimer / TEMPO.COMBO_WINDOW_MS, 0, 1);
 }
 
 window.getPlayerHitbox = getPlayerHitbox;
@@ -890,3 +1156,4 @@ window.gameEvent = gameEvent;
 window.getComboMultiplier = getComboMultiplier;
 window.getComboFraction = getComboFraction;
 window.saveHighScore = saveHighScore;
+window.continueAfterAssaultShop = continueAfterAssaultShop;

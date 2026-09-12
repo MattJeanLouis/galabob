@@ -743,9 +743,12 @@ const UIKIT = (function () {
 
   function updatePointer(e) {
     const r = canvasRect();
-    if (!r) return;
-    pointer.x = e.clientX - r.left;
-    pointer.y = e.clientY - r.top;
+    if (!r || !(r.width > 0) || !(r.height > 0)) return;
+    // Les boutons sont dessinés dans le repère logique du canvas. Sur un écran
+    // redimensionné, clientX/clientY sont en pixels CSS : sans conversion, les
+    // zones cliquables glissent par rapport aux éléments visibles.
+    pointer.x = (e.clientX - r.left) * CANVAS_WIDTH / r.width;
+    pointer.y = (e.clientY - r.top) * CANVAS_HEIGHT / r.height;
     pointer.over = true;
   }
 
@@ -855,6 +858,8 @@ const MENU_STATE = {
   bestShown: 0,       // meilleur score affiché (roulement)
   finalShown: 0       // score final du game over (roulement)
 };
+
+const ASSAULT_SHOP_UI = { revision: -1, revealAt: 0 };
 
 /** true si le son est actif (tolérant à une refonte du module audio). */
 function uiSoundEnabled() {
@@ -982,8 +987,11 @@ function drawMenu() {
   /* ------------------------------------------------------ entrées ------- */
   const bw = clamp(CANVAS_WIDTH * 0.26, 220, 340);
   const bh = 46;
-  const playY = CANVAS_HEIGHT / 2 - 6;
-  const setY = CANVAS_HEIGHT / 2 + 52;
+  const playY = Math.max(bestY + 42, CANVAS_HEIGHT / 2 - 20);
+  const choiceY = playY + 56;
+  const setY = choiceY + 44;
+  const choiceGap = 10;
+  const choiceW = (bw - choiceGap) / 2;
 
   const inPlay = clamp(UIKIT.enter(0.4, 0.5), 0, 1);
   const inSet = clamp(UIKIT.enter(0.48, 0.5), 0, 1);
@@ -995,6 +1003,36 @@ function drawMenu() {
     primary: true, alpha: inPlay,
     color: PALETTE.ui.accent,
     action: function () { if (typeof initGame === 'function') initGame(); }
+  });
+
+  UIKIT.button(c, {
+    id: 'menu.mode',
+    x: cx - bw / 2, y: choiceY, w: choiceW, h: bh - 10,
+    label: ((window.GALABOB && window.GALABOB.modes.current())
+      ? window.GALABOB.modes.current().label.toUpperCase()
+      : 'ARCADE'),
+    alpha: inSet, size: 11,
+    color: PALETTE.ui.combo,
+    action: function () {
+      if (window.GALABOB && typeof window.GALABOB.selectNextMode === 'function') {
+        window.GALABOB.selectNextMode();
+      }
+    }
+  });
+
+  UIKIT.button(c, {
+    id: 'menu.ship',
+    x: cx - bw / 2 + choiceW + choiceGap, y: choiceY, w: choiceW, h: bh - 10,
+    label: ((window.GALABOB && window.GALABOB.ships && window.GALABOB.profile)
+      ? (window.GALABOB.ships.get(window.GALABOB.profile.data.selectedShip)?.label || 'CLASSIQUE').toUpperCase()
+      : 'CLASSIQUE'),
+    alpha: inSet, size: 10.5,
+    color: PALETTE.ui.accentAlt,
+    action: function () {
+      if (window.GALABOB && typeof window.GALABOB.selectNextShip === 'function') {
+        window.GALABOB.selectNextShip();
+      }
+    }
   });
 
   UIKIT.button(c, {
@@ -1065,10 +1103,13 @@ function drawControlsPanel(c, cx, y, S) {
 
   const compact = room < 150 || CANVAS_HEIGHT < 700;
 
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  const assault = !!(runtime && runtime.modes && runtime.modes.current() && runtime.modes.current().id === 'assault');
+  const pilotKeys = assault ? 'ZQSD / FLÈCHES' : '← →';
   const rows = compact
-    ? [['← →', 'PILOTER'], ['ESPACE', 'TIRER'], ['P', 'PAUSE']]
+    ? [[pilotKeys, 'PILOTER'], ['ESPACE', 'TIRER'], ['P', 'PAUSE']]
     : [
-        ['← →', 'PILOTER'], ['ESPACE', 'TIRER'],
+        [pilotKeys, 'PILOTER'], ['ESPACE', 'TIRER'],
         ['P', 'PAUSE'], ['ESC', 'QUITTER'],
         ['A', 'AUDIO'], ['M', 'MUSIQUE'],
         ['N', 'NARRATION'], ['F3', 'STATS']
@@ -1162,6 +1203,322 @@ function drawPauseMenu() {
     action: function () { gameState = 'menu'; isPaused = false; }
   });
 
+  UIKIT.endScreen();
+}
+
+/* =============================================================================
+ *  BOUTIQUE ASSAUT — aucun drop aléatoire, le joueur dépense ses crédits ici
+ * ========================================================================== */
+function assaultShopLayout(offers, routes) {
+  const W = CANVAS_WIDTH, H = CANVAS_HEIGHT;
+  const moduleW = clamp(W * 0.245, 180, 300);
+  const moduleH = clamp(H * 0.24, 165, 210);
+  const moduleY = clamp(H * 0.34, 205, 285);
+  const offerTargets = (offers || []).map((offer, index) => ({
+    offer: offer,
+    x: W * (0.18 + index * 0.32) - moduleW / 2,
+    y: moduleY,
+    w: moduleW,
+    h: moduleH
+  }));
+  const doorW = clamp(W * 0.30, 220, 360);
+  const doorH = clamp(H * 0.14, 92, 120);
+  const doorTargets = (routes || []).map((route, index) => ({
+    route: route,
+    x: W * (index === 0 ? 0.29 : 0.71) - doorW / 2,
+    y: clamp(H * 0.10, 58, 82),
+    w: doorW,
+    h: doorH
+  }));
+  return {
+    offers: offerTargets,
+    doors: doorTargets,
+    refresh: { x: clamp(W * 0.055, 28, 70), y: H * 0.67, w: clamp(W * 0.20, 175, 245), h: 72 }
+  };
+}
+
+function shopBulletHits(bullet, target) {
+  const w = bullet.width || TEMPO.PLAYER_BULLET_W;
+  const h = bullet.height || bullet.drawH || TEMPO.PLAYER_BULLET_H;
+  return bullet.x < target.x + target.w && bullet.x + w > target.x &&
+    bullet.y < target.y + target.h && bullet.y + h > target.y;
+}
+
+/** Dans la salle d'arsenal, les tirs remplacent le pointeur. */
+function updateAssaultShopRoom() {
+  const runtime = window.GALABOB;
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  if (!mode || mode.id !== 'assault') return;
+  const state = mode.getState();
+  const layout = assaultShopLayout(mode.getShopOffers(), state.routes);
+
+  for (let i = playerBullets.length - 1; i >= 0; i--) {
+    const bullet = playerBullets[i];
+    if (!bullet) continue;
+    let consumed = false;
+    for (let j = 0; j < layout.offers.length; j++) {
+      const target = layout.offers[j];
+      if (target.offer.sold || !shopBulletHits(bullet, target)) continue;
+      mode.purchase(target.offer.id);
+      consumed = true;
+      break;
+    }
+    if (!consumed && shopBulletHits(bullet, layout.refresh)) {
+      mode.refreshShop();
+      consumed = true;
+    }
+    if (!consumed) {
+      for (let j = 0; j < layout.doors.length; j++) {
+        const target = layout.doors[j];
+        if (!shopBulletHits(bullet, target)) continue;
+        if (mode.chooseRoute(target.route.id)) continueAfterAssaultShop();
+        consumed = true;
+        break;
+      }
+    }
+    if (consumed) {
+      // Une salve double/spread compte comme UNE décision : on absorbe tous ses
+      // projectiles et on exige un nouveau relâchement avant l'achat suivant.
+      playerBullets.length = 0;
+      if (typeof assaultShopFireArmed !== 'undefined') assaultShopFireArmed = false;
+      return;
+    }
+  }
+}
+
+function shopFittedSize(text, maxWidth, preferred, tracking) {
+  let size = preferred;
+  while (size > 8 && UIKIT.labelWidth(ctx, text, size, tracking) > maxWidth) size *= 0.9;
+  return size;
+}
+
+function drawAssaultShop() {
+  const c = ctx;
+  const S = UIKIT.scale();
+  const W = CANVAS_WIDTH, H = CANVAS_HEIGHT;
+  const runtime = window.GALABOB;
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  if (!mode || mode.id !== 'assault') return;
+  const state = mode.getState();
+  const offers = mode.getShopOffers();
+  const layout = assaultShopLayout(offers, state.routes);
+
+  UIKIT.beginScreen('assault-shop-room');
+  drawScreenBackdrop(c, { veil: 0.55, horizon: 0.70, gridAlpha: 0.30, scan: 0.12 });
+
+  UIKIT.label(c, 'SALLE D’ARSENAL · TIREZ POUR ACHETER', 28 * S, 31 * S, PALETTE.ui.textDim, {
+    size: 9 * S, tracking: 2.5 * S, align: 'left', alpha: 0.74
+  });
+  UIKIT.vector(c, Math.round(state.credits) + ' CR', W - 30 * S, 34 * S, 25 * S, PALETTE.ui.combo, {
+    align: 'right', tracking: 4 * S, width: 1.8 * S
+  });
+
+  // Portes du prochain secteur, massives et placées au fond de la salle.
+  for (let i = 0; i < layout.doors.length; i++) {
+    const target = layout.doors[i], route = target.route;
+    const pulse = 0.68 + Math.sin(FRAME.realTime * 2.4 + i) * 0.12;
+    UIKIT.bracketFrame(c, target.x, target.y, target.w, target.h, route.color, {
+      corner: 28 * S, width: 2.3 * S, alpha: pulse
+    });
+    NEON.line(c, target.x + target.w / 2, target.y + 9, target.x + target.w / 2,
+      target.y + target.h - 9, route.color, 1.2, { alpha: 0.25 });
+    const titleSize = shopFittedSize(route.label, target.w - 28 * S, 13 * S, 1.6 * S);
+    UIKIT.label(c, route.label, target.x + target.w / 2, target.y + target.h * 0.45,
+      route.color, { size: titleSize, tracking: 1.6 * S, align: 'center', alpha: 0.94 });
+    const detailSize = shopFittedSize(route.detail, target.w - 24 * S, 8 * S, 1.1 * S);
+    UIKIT.label(c, route.detail, target.x + target.w / 2, target.y + target.h * 0.70,
+      PALETTE.ui.textDim, { size: detailSize, tracking: 1.1 * S, align: 'center', alpha: 0.75 });
+  }
+
+  // Modules : objets flottants, sans cartes ni paragraphes qui se chevauchent.
+  const colors = { offense: PALETTE.ui.warn, defense: PALETTE.ui.good, utility: PALETTE.ui.accent };
+  for (let i = 0; i < layout.offers.length; i++) {
+    const target = layout.offers[i], offer = target.offer;
+    const color = colors[offer.kind] || PALETTE.ui.accentAlt;
+    const cx = target.x + target.w / 2;
+    const floatY = Math.sin(FRAME.realTime * 2.8 + i * 1.9) * 5 * S;
+    const cy = target.y + target.h * 0.27 + floatY;
+    const alpha = offer.sold ? 0.30 : 1;
+    NEON.ring(c, cx, cy, 25 * S, 2, color, { alpha: 0.60 * alpha, dash: [7, 5], dashOffset: FRAME.realTime * 28 });
+    NEON.ring(c, cx, cy, 12 * S, 1.3, color, { alpha: 0.82 * alpha });
+    NEON.dot(c, cx, cy, 4 * S, color, { alpha: alpha });
+    const titleSize = shopFittedSize(offer.sold ? 'INSTALLÉ' : offer.label, target.w - 18 * S, 13 * S, 1.5 * S);
+    UIKIT.label(c, offer.sold ? 'INSTALLÉ' : offer.label, cx, target.y + target.h * 0.57,
+      offer.sold ? PALETTE.ui.good : color, { size: titleSize, tracking: 1.5 * S, align: 'center', alpha: 0.94 * alpha });
+    const effectText = offer.detail + '  ' + offer.delta;
+    const effectSize = shopFittedSize(effectText, target.w - 16 * S, 8 * S, 1.0 * S);
+    UIKIT.label(c, effectText, cx, target.y + target.h * 0.73,
+      PALETTE.ui.textDim, { size: effectSize, tracking: 1.0 * S, align: 'center', alpha: 0.72 * alpha });
+    UIKIT.vector(c, offer.sold ? 'OK' : offer.cost + ' CR', cx, target.y + target.h - 15 * S,
+      15 * S, offer.sold ? PALETTE.ui.good : color, { align: 'center', tracking: 2 * S, width: 1.3, alpha: alpha });
+  }
+
+  const refresh = layout.refresh;
+  const refreshCost = mode.getRefreshCost();
+  UIKIT.bracketFrame(c, refresh.x, refresh.y, refresh.w, refresh.h, PALETTE.ui.accent, {
+    corner: 18 * S, width: 1.5, alpha: 0.55
+  });
+  UIKIT.label(c, 'BORNE DE RELANCE', refresh.x + refresh.w / 2, refresh.y + 27 * S,
+    PALETTE.ui.accent, { size: 10 * S, tracking: 1.7 * S, align: 'center' });
+  UIKIT.label(c, refreshCost + ' CR · TIREZ', refresh.x + refresh.w / 2, refresh.y + 51 * S,
+    PALETTE.ui.textDim, { size: 8.5 * S, tracking: 1.4 * S, align: 'center', alpha: 0.8 });
+
+  UIKIT.label(c, state.message, W / 2, H - 18 * S,
+    state.message.indexOf('INSUFFISANTS') >= 0 ? PALETTE.ui.warn : PALETTE.ui.textDim,
+    { size: 9 * S, tracking: 2 * S, align: 'center', alpha: 0.85 });
+
+  const shopArmed = typeof assaultShopFireArmed === 'undefined' || assaultShopFireArmed;
+  UIKIT.label(c,
+    shopArmed ? 'VISEZ UN MODULE, LA BORNE OU UNE PORTE' : 'RELÂCHEZ LE TIR POUR ACTIVER L’ARSENAL',
+    W / 2, H - 43 * S, shopArmed ? PALETTE.ui.textDim : PALETTE.ui.warn,
+    { size: 8 * S, tracking: 1.7 * S, align: 'center', alpha: shopArmed ? 0.62 : 0.95 });
+
+  drawPlayerBullets();
+  drawPlayer();
+  UIKIT.endScreen('none');
+}
+
+/** Ancienne maquette conservée temporairement hors exécution. */
+function _drawAssaultShopCardsLegacy() {
+  const c = ctx;
+  const S = UIKIT.scale();
+  const W = CANVAS_WIDTH, H = CANVAS_HEIGHT;
+  const runtime = window.GALABOB;
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  if (!mode || mode.id !== 'assault') return;
+
+  const state = mode.getState();
+  const offers = mode.getShopOffers();
+  UIKIT.beginScreen('assault-shop');
+  drawScreenBackdrop(c, { veil: 0.78, horizon: 0.72, gridAlpha: 0.24, scan: 0.20 });
+
+  if (ASSAULT_SHOP_UI.revision !== state.shopRevision) {
+    ASSAULT_SHOP_UI.revision = state.shopRevision;
+    ASSAULT_SHOP_UI.revealAt = FRAME.realTime;
+  }
+
+  const left = clamp(W * 0.06, 28, 76);
+  UIKIT.label(c, 'RAVITAILLEMENT // SECTEUR ' + state.stage, left, 42 * S, PALETTE.ui.textDim, {
+    size: 10 * S, tracking: 3.2 * S, align: 'left', alpha: 0.72
+  });
+  UIKIT.vectorTitle(c, 'CHOISISSEZ VOTRE AVANTAGE', left, 77 * S,
+    clamp(W * 0.032, 23, 39) * S, PALETTE.ui.text, {
+      align: 'left', tracking: 5 * S, width: 1.7 * S
+    });
+  UIKIT.label(c, 'ARRIVAGE LIMITÉ · TROIS MODULES', left, 105 * S, PALETTE.ui.combo, {
+    size: 9 * S, tracking: 3.4 * S, align: 'left', alpha: 0.82
+  });
+
+  UIKIT.label(c, 'SOLDE DISPONIBLE', W - left, 48 * S, PALETTE.ui.textDim, {
+    size: 9 * S, tracking: 2.6 * S, align: 'right', alpha: 0.66
+  });
+  UIKIT.vector(c, Math.round(state.credits) + ' CR', W - left, 82 * S, 25 * S, PALETTE.ui.combo, {
+    align: 'right', tracking: 4 * S, width: 1.8 * S
+  });
+
+  const totalW = clamp(W * 0.88, 570, 960);
+  const gap = clamp(W * 0.018, 12, 22);
+  const bw = (totalW - gap * 2) / 3;
+  const bh = clamp(H * 0.38, 230, 270);
+  const baseY = clamp(H * 0.235, 138, 185);
+  const startX = (W - totalW) / 2;
+  const colors = {
+    offense: PALETTE.ui.warn,
+    weapon: PALETTE.ui.accentAlt,
+    defense: PALETTE.ui.good,
+    utility: PALETTE.ui.accent,
+    ammo: PALETTE.ui.combo
+  };
+
+  for (let index = 0; index < offers.length; index++) {
+    const offer = offers[index];
+    const elapsed = Math.max(0, FRAME.realTime - ASSAULT_SHOP_UI.revealAt - index * 0.08);
+    const enter = UIKIT.reduceMotion ? 1 : UIKIT.easeOutCubic(clamp(elapsed / 0.42, 0, 1));
+    const x = startX + index * (bw + gap);
+    const y = baseY + (index === 1 ? -10 * S : 0) + (1 - enter) * 28 * S;
+    const color = colors[offer.kind] || PALETTE.ui.accent;
+    const affordable = state.credits >= offer.cost;
+    const alpha = (offer.sold ? 0.34 : 1) * enter;
+
+    const panel = new Path2D(); panel.rect(x, y, bw, bh);
+    NEON.fillPath(c, panel, color, {
+      alpha: (offer.rarity === 'ÉPIQUE' ? 0.105 : 0.065) * alpha,
+      core: false, glowAlpha: 0.75
+    });
+    UIKIT.bracketFrame(c, x, y, bw, bh, color, {
+      corner: 24 * S, width: offer.rarity === 'ÉPIQUE' ? 2.2 : 1.4,
+      alpha: 0.68 * alpha
+    });
+
+    UIKIT.vector(c, '0' + (index + 1), x + bw - 16 * S, y + 34 * S, 21 * S, color, {
+      align: 'right', tracking: 2 * S, width: 1.2 * S, alpha: 0.32 * alpha
+    });
+    UIKIT.label(c, offer.rarity, x + 17 * S, y + 22 * S, color, {
+      size: 8 * S, tracking: 3 * S, align: 'left', alpha: 0.82 * alpha
+    });
+
+    // Sceau central propre à la famille du module.
+    const sigX = x + bw / 2, sigY = y + 66 * S;
+    NEON.ring(c, sigX, sigY, 17 * S, color, 1.4, { alpha: 0.42 * alpha, passes: 3 });
+    NEON.dot(c, sigX, sigY, offer.kind === 'weapon' ? 4.2 * S : 2.6 * S,
+      color, { alpha: 0.86 * alpha });
+    if (offer.kind === 'offense' || offer.kind === 'weapon') {
+      NEON.line(c, sigX - 25 * S, sigY, sigX + 25 * S, sigY, color, 1.2, { alpha: 0.48 * alpha });
+    } else {
+      NEON.line(c, sigX, sigY - 25 * S, sigX, sigY + 25 * S, color, 1.2, { alpha: 0.48 * alpha });
+    }
+
+    UIKIT.label(c, offer.sold ? 'MODULE INSTALLÉ' : offer.label,
+      x + bw / 2, y + 108 * S, offer.sold ? PALETTE.ui.good : color, {
+        size: clamp(bw * 0.055, 10, 14) * S, tracking: 2 * S,
+        align: 'center', alpha: 0.94 * alpha
+      });
+    UIKIT.label(c, offer.detail, x + bw / 2, y + 134 * S, PALETTE.ui.textDim, {
+      size: 8.5 * S, tracking: 1.6 * S, align: 'center', alpha: 0.72 * alpha
+    });
+    UIKIT.vector(c, offer.delta, x + bw / 2, y + 165 * S, 19 * S, color, {
+      align: 'center', tracking: 2.4 * S, width: 1.5 * S, alpha: 0.9 * alpha
+    });
+
+    UIKIT.button(c, {
+      id: 'shop.' + offer.id,
+      x: x + 14 * S, y: y + bh - 45 * S, w: bw - 28 * S, h: 31 * S,
+      label: offer.sold ? 'ACQUIS' : offer.cost + ' CR',
+      size: 10 * S,
+      alpha: alpha,
+      color: offer.sold ? PALETTE.ui.good : (affordable ? color : PALETTE.ui.textDim),
+      action: offer.sold ? null : function () { mode.purchase(offer.id); }
+    });
+  }
+
+  const actionsY = Math.min(H - 68 * S, baseY + bh + 28 * S);
+  const refreshCost = mode.getRefreshCost();
+  UIKIT.button(c, {
+    id: 'shop.refresh',
+    x: left, y: actionsY, w: 230 * S, h: 40 * S,
+    label: 'NOUVEL ARRIVAGE · ' + refreshCost + ' CR',
+    color: state.credits >= refreshCost ? PALETTE.ui.accent : PALETTE.ui.textDim,
+    size: 10 * S,
+    action: function () { mode.refreshShop(); }
+  });
+  UIKIT.label(c, 'LE PROCHAIN SCAN COÛTERA PLUS CHER', left, actionsY + 55 * S, PALETTE.ui.textDim, {
+    size: 7.5 * S, tracking: 1.7 * S, align: 'left', alpha: 0.55
+  });
+
+  UIKIT.button(c, {
+    id: 'shop.continue',
+    x: W - left - 230 * S, y: actionsY, w: 230 * S, h: 40 * S,
+    label: 'SECTEUR SUIVANT', hint: 'ENTRÉE', hintW: 58 * S,
+    primary: true, size: 11 * S, color: PALETTE.ui.good,
+    action: function () {
+      if (typeof continueAfterAssaultShop === 'function') continueAfterAssaultShop();
+    }
+  });
+
+  UIKIT.label(c, state.message, W / 2, H - 14 * S,
+    state.message.indexOf('INSUFFISANTS') >= 0 ? PALETTE.ui.warn : PALETTE.ui.textDim, {
+      size: 9 * S, tracking: 2 * S, align: 'center', alpha: 0.8
+    });
   UIKIT.endScreen();
 }
 
@@ -1390,4 +1747,3 @@ function drawSettingsMenu() {
 
   UIKIT.endScreen();
 }
-

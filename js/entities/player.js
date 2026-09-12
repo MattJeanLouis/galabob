@@ -59,6 +59,12 @@
  *  OBJET JOUEUR
  * -------------------------------------------------------------------------- */
 const player = {
+  shipId: 'classic',
+  shipStats: {
+    speedMultiplier: 1,
+    fireRateMultiplier: 1,
+    hitboxMultiplier: 1
+  },
   x: CANVAS_WIDTH / 2 - 20,
   y: CANVAS_HEIGHT - 60,
   width: 40,
@@ -85,8 +91,8 @@ const player = {
   shieldBreak: 0,                 // ms restantes de l'animation de rupture
 
   /* --- EMPLACEMENT 3 : MODIFICATEURS CUMULABLES (ms restantes) --- */
-  mods:    { ralenti: 0, aimant: 0, multiplicateur: 0, surcharge: 0 },
-  modsMax: { ralenti: 1, aimant: 1, multiplicateur: 1, surcharge: 1 },
+  mods:    { ralenti: 0, aimant: 0, multiplicateur: 0, surcharge: 0, furie: 0 },
+  modsMax: { ralenti: 1, aimant: 1, multiplicateur: 1, surcharge: 1, furie: 1 },
 
   /* --- état du faisceau continu (arme 'laser') --- */
   laser: { on: false, power: 0, tick: 0, sound: 0, hits: [] },
@@ -100,6 +106,7 @@ const player = {
 
   /* --- état de pilotage (interne, mais lisible par le HUD/les effets) --- */
   vx: 0,                          // px/s
+  vy: 0,                          // px/s — utilisé uniquement en Assaut
   tilt: 0,                        // -1..1 — inclinaison visuelle
   thrust: 0,                      // 0..1 — intensité du réacteur
   kick: 0,                        // px de recul visuel au tir
@@ -110,7 +117,6 @@ const player = {
 /* -----------------------------------------------------------------------------
  *  Variables de tir (globales historiques : hud.js lit `shotCooldown`)
  * -------------------------------------------------------------------------- */
-let lastShotTime = 0;
 let shotCooldown = TEMPO.PLAYER_FIRE_INTERVAL;   // ms — cadence courante
 
 // Flashs de bouche vivants : {x, y, life, max, angle, size, color}
@@ -154,7 +160,7 @@ const PLAYER_WEAPON_LABELS = {
 };
 
 /** Modificateurs cumulables : chacun a SA minuterie. */
-const PLAYER_MOD_KEYS = ['ralenti', 'aimant', 'multiplicateur', 'surcharge'];
+const PLAYER_MOD_KEYS = ['ralenti', 'aimant', 'multiplicateur', 'surcharge', 'furie'];
 
 /** Cadence de base par arme, en ms (les valeurs historiques restent dans TEMPO). */
 const PLAYER_WEAPON_INTERVAL = {
@@ -441,6 +447,8 @@ function updatePlayerMovement(dt) {
   const dir = (typeof INPUT !== 'undefined' && INPUT.axisX)
     ? INPUT.axisX()
     : ((keys['ArrowRight'] || keys['Right'] ? 1 : 0) - (keys['ArrowLeft'] || keys['Left'] ? 1 : 0));
+  const assault = (_playerGameMode() || {}).id === 'assault';
+  const dirY = assault && typeof INPUT !== 'undefined' && INPUT.axisY ? INPUT.axisY() : 0;
 
   // player.speed est en px/s (player.usesPxPerSecond = true).
   const maxSpeed = (player.speed > 0 ? player.speed : TEMPO.PLAYER_SPEED);
@@ -454,7 +462,16 @@ function updatePlayerMovement(dt) {
   player.vx = damp(player.vx, target, rate, dt);
   if (dir === 0 && Math.abs(player.vx) < 2) player.vx = 0;
 
+  // L'Assaut se joue dans une bande basse en 2D : assez de latitude pour
+  // esquiver et choisir sa distance, sans pouvoir traverser la formation.
+  const verticalSpeed = maxSpeed * 0.68;
+  const targetYSpeed = dirY * verticalSpeed;
+  const verticalRate = dirY === 0 ? PLAYER_RATE_BRAKE : PLAYER_RATE_ACCEL;
+  player.vy = damp(player.vy || 0, targetYSpeed, verticalRate, dt);
+  if (dirY === 0 && Math.abs(player.vy) < 2) player.vy = 0;
+
   player.x += player.vx * dt;
+  if (assault) player.y += player.vy * dt;
 
   // Bords : petit rebond amorti, plus vivant qu'un arrêt net.
   const minX = TEMPO.PLAYER_MARGIN;
@@ -467,10 +484,26 @@ function updatePlayerMovement(dt) {
     if (player.vx > 0) player.vx *= -0.18;
   }
 
+
+  if (assault) {
+    const minY = CANVAS_HEIGHT * 0.60;
+    const maxY = CANVAS_HEIGHT - player.height - TEMPO.PLAYER_MARGIN;
+    if (player.y < minY) {
+      player.y = minY;
+      if (player.vy < 0) player.vy *= -0.14;
+    } else if (player.y > maxY) {
+      player.y = maxY;
+      if (player.vy > 0) player.vy *= -0.14;
+    }
+  } else {
+    player.vy = 0;
+  }
+
   // Inclinaison visuelle et régime du réacteur.
   const norm = clamp(player.vx / maxSpeed, -1, 1);
   player.tilt = damp(player.tilt, norm, PLAYER_RATE_TILT, dt);
-  player.thrust = damp(player.thrust, 0.34 + 0.66 * Math.abs(norm), PLAYER_RATE_THRUST, dt);
+  const movementLoad = Math.max(Math.abs(norm), Math.abs(player.vy / verticalSpeed));
+  player.thrust = damp(player.thrust, 0.34 + 0.66 * movementLoad, PLAYER_RATE_THRUST, dt);
 
   // Retour élastique du recul.
   player.kick = damp(player.kick, 0, PLAYER_RATE_KICK, dt);
@@ -479,6 +512,18 @@ function updatePlayerMovement(dt) {
 }
 
 /* ----------------------------------------------------------------------- tir */
+
+function _playerGameMode() {
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  return runtime && runtime.modes ? runtime.modes.current() : null;
+}
+
+function _playerDamageMultiplier() {
+  const mode = _playerGameMode();
+  return mode && typeof mode.damageMultiplier === 'function'
+    ? Math.max(0.05, Number(mode.damageMultiplier()) || 1)
+    : 1;
+}
 
 /** Cadence courante en ms : arme, niveau et SURCHARGE compris. */
 function currentFireInterval() {
@@ -491,7 +536,14 @@ function currentFireInterval() {
 
   const lvl = clamp(player.weaponLevel | 0, 1, 3);
   let ms = base * (1 - 0.09 * (lvl - 1));
+  const shipFireRate = player.shipStats ? Number(player.shipStats.fireRateMultiplier) || 1 : 1;
+  ms /= shipFireRate;
   if (playerHasMod('surcharge')) ms *= PLAYER_SURCHARGE_RATE;
+  if (playerHasMod('furie')) ms *= 0.72;
+  const mode = _playerGameMode();
+  if (mode && typeof mode.adjustFireInterval === 'function') {
+    ms = mode.adjustFireInterval(ms, player.weapon);
+  }
   return Math.max(PLAYER_FIRE_INTERVAL_MIN, ms);
 }
 
@@ -503,8 +555,18 @@ function updatePlayerFiring(deltaTime) {
     player.fireCooldown = Math.max(0, player.fireCooldown - deltaTime);
   }
 
+  // En entrant dans l'arsenal, le tir maintenu qui vient de tuer le dernier
+  // ennemi ne doit pas acheter un module par accident. Un relâchement réarme
+  // explicitement les tirs de sélection.
+  if (typeof gameState !== 'undefined' && gameState === 'shop' &&
+      typeof assaultShopFireArmed !== 'undefined' && !assaultShopFireArmed) return;
+
   const held = (typeof INPUT !== 'undefined' && INPUT.shoot) ? INPUT.shoot() : !!keys[' '];
   const buffered = (typeof INPUT !== 'undefined' && INPUT.shootBuffered) ? INPUT.shootBuffered() : false;
+  const mode = _playerGameMode();
+  // Le chargeur et la recharge du mode Assaut suffisent à rythmer le canon :
+  // maintenir la touche vide le chargeur puis reprend automatiquement après
+  // la recharge, sans imposer au joueur de marteler Espace.
   const wants = held || buffered;
 
   // LASER : faisceau CONTINU, aucune cadence. On note juste l'intention de tir ;
@@ -522,6 +584,10 @@ function updatePlayerFiring(deltaTime) {
   }
 
   if (player.fireCooldown <= 0 && wants) {
+    if (mode && typeof mode.requestShot === 'function' && !mode.requestShot(player.weapon)) {
+      if (typeof INPUT !== 'undefined' && INPUT.consumeShoot) INPUT.consumeShoot();
+      return;
+    }
     firePlayerWeapon();
     player.fireCooldown = interval;
     if (typeof INPUT !== 'undefined' && INPUT.consumeShoot) INPUT.consumeShoot();
@@ -635,7 +701,6 @@ function fireOneWeapon() {
   else if (w === 'mitraille') JUICE.preset('playerShot', 0.45);   // 17 tirs/s : on dose
   else JUICE.preset('playerShot', 0.85);
 
-  lastShotTime = Date.now();
   if (typeof gameEvent === 'function') {
     gameEvent('playerShot', { weapon: w, level: lvl });
   }
@@ -660,7 +725,7 @@ function _playerShot(x, y, vx, speed, kind, damage, color) {
       vx: vx,
       speed: speed,
       weapon: kind,
-      damage: damage == null ? 1 : damage
+      damage: (damage == null ? 1 : damage) * _playerDamageMultiplier()
     });
   }
   spawnMuzzleFlash(x, y, kind, vx, color);
@@ -696,6 +761,8 @@ function updateMuzzleFlashes(deltaTime) {
 /* ------------------------------------------------------------- arme spéciale */
 function updatePlayerWeaponTimer(deltaTime) {
   if (!player.weapons) player.weapons = {};
+  const timerMode = _playerGameMode();
+  const timersEnabled = !timerMode || timerMode.weaponTimers !== false;
 
   // game.js remet weapon='normal' quand le joueur est touché : on vide alors
   // TOUTES les armes, sinon elles ressusciteraient à la frame suivante.
@@ -710,7 +777,7 @@ function updatePlayerWeaponTimer(deltaTime) {
   let restantes = 0, plusLongue = 0, typeLePlusLong = null;
   for (const type in player.weapons) {
     const a = player.weapons[type];
-    a.timer -= deltaTime;
+    if (timersEnabled) a.timer -= deltaTime;
     if (a.timer <= 0) { delete player.weapons[type]; continue; }
     restantes++;
     if (a.timer > plusLongue) { plusLongue = a.timer; typeLePlusLong = type; }
@@ -913,7 +980,6 @@ function updatePlayerLaser(deltaTime, dt) {
   L.sound -= deltaTime;
   if (L.sound <= 0) {
     L.sound = LASER_SOUND_MS;
-    lastShotTime = Date.now();
     if (typeof gameEvent === 'function') gameEvent('playerShot', { weapon: 'laser', level: lvl });
   }
 }
@@ -944,7 +1010,7 @@ function _spawnMissile(x, y, ang) {
     life: MISSILE_LIFE_MS,
     retarget: 0,
     target: null,
-    damage: MISSILE_DAMAGE * (playerHasMod('surcharge') ? 1.5 : 1),
+    damage: MISSILE_DAMAGE * (playerHasMod('surcharge') ? 1.5 : 1) * _playerDamageMultiplier(),
     seed: Math.random() * 6.2832
   });
   spawnMuzzleFlash(x, y, 'double', Math.cos(ang) * 900, _wcolor('missiles'));
@@ -964,7 +1030,7 @@ function _fireOnde(cx, noseY, lvl, over) {
     amp: 32 + (lvl - 1) * 9,
     phase: Math.random() * 6.2832,
     age: 0,
-    damage: 1,
+    damage: _playerDamageMultiplier(),
     hits: []                     // perfore : chaque ennemi n'est touché QU'UNE fois
   });
   spawnMuzzleFlash(cx, noseY, 'spread', 0, _wcolor('onde'));
@@ -1400,26 +1466,13 @@ function drawPlayer() {
   // Réacteur : dessiné avant la coque pour passer dessous.
   drawPlayerThruster(c, t, alpha);
 
-  // Coque : halo large + noyau blanc.
-  const boost = 1 + player.charge * 0.30;
-  NEON.custom(c, _shipHull, 'player', 1.9, {
-    alpha: alpha,
-    glowScale: boost,
-    join: 'round'
-  });
-  NEON.fillPath(c, _shipHull, 'player', { alpha: alpha * 0.13, glowAlpha: 0.16, coreAlpha: 0.04 });
-
-  // Détails internes
-  NEON.custom(c, _shipSpine, 'player', 1.0, { alpha: alpha * 0.55, passes: 3 });
-  NEON.custom(c, _shipCockpit, 'playerCore', 1.1, {
-    alpha: alpha * (0.42 + 0.18 * Math.sin(t * 4.2)),
-    passes: 3
-  });
-
-  // Feux de position : deux points aux extrémités d'ailes
-  const blinkNav = 0.35 + 0.30 * Math.sin(t * 6.5);
-  NEON.dot(c, -19, 9, 1.1, 'playerShield', { alpha: alpha * blinkNav });
-  NEON.dot(c, 19, 9, 1.1, 'playerShield', { alpha: alpha * blinkNav });
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  const ship = runtime && runtime.ships ? runtime.ships.get(player.shipId) : null;
+  const rendererId = ship ? ship.renderer : 'legacy-vector';
+  const rendered = runtime && runtime.shipRenderers
+    ? runtime.shipRenderers.draw(rendererId, c, { alpha: alpha, time: t, charge: player.charge })
+    : false;
+  if (!rendered) drawClassicPlayerHull(c, { alpha: alpha, time: t, charge: player.charge });
 
   c.restore();
 
@@ -1448,6 +1501,66 @@ function drawPlayer() {
   });
 
   drawMuzzleFlashes(c);
+}
+
+function drawClassicPlayerHull(c, state) {
+  const alpha = state.alpha;
+  const t = state.time;
+  // Coque : halo large + noyau blanc.
+  const boost = 1 + state.charge * 0.30;
+  NEON.custom(c, _shipHull, 'player', 1.9, {
+    alpha: alpha,
+    glowScale: boost,
+    join: 'round'
+  });
+  NEON.fillPath(c, _shipHull, 'player', { alpha: alpha * 0.13, glowAlpha: 0.16, coreAlpha: 0.04 });
+
+  // Détails internes
+  NEON.custom(c, _shipSpine, 'player', 1.0, { alpha: alpha * 0.55, passes: 3 });
+  NEON.custom(c, _shipCockpit, 'playerCore', 1.1, {
+    alpha: alpha * (0.42 + 0.18 * Math.sin(t * 4.2)),
+    passes: 3
+  });
+
+  // Feux de position : deux points aux extrémités d'ailes
+  const blinkNav = 0.35 + 0.30 * Math.sin(t * 6.5);
+  NEON.dot(c, -19, 9, 1.1, 'playerShield', { alpha: alpha * blinkNav });
+  NEON.dot(c, 19, 9, 1.1, 'playerShield', { alpha: alpha * blinkNav });
+}
+
+let _interceptorHull = null;
+let _bastionHull = null;
+
+function _variantHull(points) {
+  const path = new Path2D();
+  path.moveTo(points[0], points[1]);
+  for (let index = 2; index < points.length; index += 2) path.lineTo(points[index], points[index + 1]);
+  path.closePath();
+  return path;
+}
+
+function drawInterceptorPlayerHull(c, state) {
+  if (!_interceptorHull) {
+    _interceptorHull = _variantHull([0, -18, 5, -4, 18, 10, 4, 6, 0, 13, -4, 6, -18, 10, -5, -4]);
+  }
+  NEON.custom(c, _interceptorHull, 'player', 1.7, {
+    alpha: state.alpha, glowScale: 1.1 + state.charge * 0.25, join: 'round'
+  });
+  NEON.fillPath(c, _interceptorHull, 'player', { alpha: state.alpha * 0.10, glowAlpha: 0.14 });
+  NEON.line(c, 0, -13, 0, 7, 'playerCore', 1.2, { alpha: state.alpha * 0.75, passes: 3 });
+  NEON.dot(c, 0, -3, 1.7, 'playerCore', { alpha: state.alpha });
+}
+
+function drawBastionPlayerHull(c, state) {
+  if (!_bastionHull) {
+    _bastionHull = _variantHull([0, -14, 9, -6, 22, 3, 18, 12, 7, 9, 0, 14, -7, 9, -18, 12, -22, 3, -9, -6]);
+  }
+  NEON.custom(c, _bastionHull, 'playerShield', 2.2, {
+    alpha: state.alpha, glowScale: 1.2 + state.charge * 0.30, join: 'round'
+  });
+  NEON.fillPath(c, _bastionHull, 'playerShield', { alpha: state.alpha * 0.15, glowAlpha: 0.18 });
+  NEON.line(c, -12, 3, 12, 3, 'player', 1.4, { alpha: state.alpha * 0.75, passes: 3 });
+  NEON.dot(c, 0, -2, 2.4, 'playerCore', { alpha: state.alpha });
 }
 
 /* ------------------------------------------------------------- le réacteur */
@@ -1556,6 +1669,9 @@ function drawMuzzleFlashes(c) {
  *  et utilisable depuis la console de debug.
  * ========================================================================== */
 window.player = player;
+window.drawClassicPlayerHull = drawClassicPlayerHull;
+window.drawInterceptorPlayerHull = drawInterceptorPlayerHull;
+window.drawBastionPlayerHull = drawBastionPlayerHull;
 window.setPlayerWeapon = setPlayerWeapon;
 window.getPlayerWeaponLabel = getPlayerWeaponLabel;
 window.isPlayerWeapon = isPlayerWeapon;

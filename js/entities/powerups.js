@@ -78,95 +78,11 @@ const POWERUP_DROP_CHANCE = 0.15;
  *  pips     : nombre de marqueurs orbitaux
  *  rare     : ajoute un anneau contre-rotatif — le butin rare doit SE VOIR
  * ========================================================================== */
-const POWERUP_TYPES = [
-  /* ---------------------------- ARMES (emplacement EXCLUSIF) ------------- */
-  {
-    key: 'double', label: 'DOUBLE', letter: 'D', slot: 'weapon',
-    color: 'powerup.double',                       // #00ffc8 — vert menthe
-    shape: { kind: 'poly', sides: 6, rot: 0 },     // hexagone
-    weight: 15, duration: null, pips: 3
-  },
-  {
-    key: 'spread', label: 'SPREAD', letter: 'S', slot: 'weapon',
-    color: 'powerup.spread',                       // #ffd166 — or
-    shape: { kind: 'poly', sides: 3, rot: Math.PI / 2 },   // triangle pointe bas
-    weight: 15, duration: null, pips: 3
-  },
-  {
-    key: 'laser', label: 'LASER', letter: 'L', slot: 'weapon',
-    color: '#ff4df0',                              // fuchsia clair
-    shape: { kind: 'poly', sides: 4, rot: -Math.PI / 2, sx: 0.60, sy: 1.28 },
-    weight: 6, duration: null, pips: 2, rare: true
-  },
-  {
-    key: 'missiles', label: 'MISSILES', letter: 'M', slot: 'weapon',
-    color: '#ff9d3d',                              // orange réacteur
-    shape: { kind: 'poly', sides: 5, rot: -Math.PI / 2 },  // pentagone pointe haut
-    weight: 9, duration: null, pips: 3
-  },
-  {
-    key: 'mitraille', label: 'MITRAILLE', letter: 'R', slot: 'weapon',
-    color: '#a6ff3d',                              // vert citron
-    shape: { kind: 'poly', sides: 8, rot: Math.PI / 8 },   // octogone
-    weight: 11, duration: null, pips: 4
-  },
-  {
-    key: 'onde', label: 'ONDE', letter: 'O', slot: 'weapon',
-    color: '#4db8ff',                              // bleu ciel
-    shape: { kind: 'poly', sides: 20, rot: 0 },    // disque
-    weight: 10, duration: null, pips: 2
-  },
-
-  /* ------------------------------ DÉFENSIF ------------------------------- */
-  {
-    key: 'bouclier', label: 'BOUCLIER', letter: 'B', slot: 'shield',
-    color: '#8affff',                              // cyan pâle
-    shape: { kind: 'shield' },                     // écusson
-    weight: 12, duration: 0, charges: 1, pips: 3
-  },
-  {
-    key: 'ralenti', label: 'RALENTI', letter: 'T', slot: 'mod',
-    color: '#6f7dff',                              // indigo
-    shape: { kind: 'hourglass' },                  // sablier
-    weight: 4, duration: 3000, pips: 2, rare: true
-  },
-
-  /* ------------------------------ SPECTACLE ------------------------------ */
-  {
-    key: 'bombe', label: 'BOMBE', letter: '!', slot: 'instant',
-    color: '#ffffff',                              // blanc pur — c'est le flash
-    shape: { kind: 'poly', sides: 14, rot: 0, rays: 8 },   // soleil
-    weight: 3, duration: 0, pips: 4, rare: true, impact: 1.9
-  },
-  {
-    key: 'surcharge', label: 'SURCHARGE', letter: 'U', slot: 'mod',
-    color: '#c86bff',                              // violet électrique
-    shape: { kind: 'star', points: 8, inner: 0.58, rot: 0 },
-    weight: 5, duration: 5000, pips: 0, rare: true, impact: 1.4
-  },
-
-  /* -------------------------------- SCORE -------------------------------- */
-  {
-    key: 'aimant', label: 'AIMANT', letter: 'A', slot: 'mod',
-    color: '#ff6ec7',                              // rose bonbon
-    shape: { kind: 'magnet' },                     // fer à cheval
-    weight: 8, duration: 12000, pips: 2
-  },
-  {
-    key: 'multiplicateur', label: '×2 POINTS', letter: 'X', slot: 'mod',
-    color: '#ffee55',                              // jaune vif
-    shape: { kind: 'star', points: 4, inner: 0.40, rot: -Math.PI / 2 },
-    weight: 8, duration: 10000, pips: 4
-  },
-
-  /* --------------------------------- VIE --------------------------------- */
-  {
-    key: 'life', label: '+1 VIE', letter: '+', slot: 'instant',
-    color: 'powerup.life',                         // #ff4fa3 — rose
-    shape: { kind: 'cross' },                      // croix
-    weight: 3, duration: 0, pips: 4, rare: true, impact: 1.6
-  }
-];
+const POWERUP_TYPES = window.GALABOB_POWER_UP_CATALOGUE;
+const POWERUP_ALIASES = window.GALABOB_POWER_UP_ALIASES;
+if (!Array.isArray(POWERUP_TYPES) || !POWERUP_ALIASES) {
+  throw new Error('Le catalogue des power-ups doit etre charge avant powerups.js');
+}
 
 /* --- index par clé + alias tolérants ------------------------------------- */
 const POWERUP_BY_KEY = {};
@@ -174,23 +90,12 @@ for (let i = 0; i < POWERUP_TYPES.length; i++) {
   POWERUP_BY_KEY[POWERUP_TYPES[i].key] = POWERUP_TYPES[i];
 }
 
-/** Les autres modules (et les autres agents) n'ont pas tous le même vocabulaire. */
-const POWERUP_ALIASES = {
-  vie: 'life', extralife: 'life', heart: 'life',
-  shield: 'bouclier', bouclier: 'bouclier',
-  slow: 'ralenti', slowmo: 'ralenti', bullettime: 'ralenti',
-  magnet: 'aimant',
-  multi: 'multiplicateur', x2: 'multiplicateur', score: 'multiplicateur',
-  overdrive: 'surcharge', overload: 'surcharge',
-  bomb: 'bombe', smart: 'bombe',
-  missile: 'missiles', homing: 'missiles',
-  wave: 'onde', ondulation: 'onde',
-  rapid: 'mitraille', gatling: 'mitraille', rafale: 'mitraille',
-  beam: 'laser'
-};
-
 /** Définition d'un type. Ne renvoie JAMAIS null (repli : 'double'). */
 function powerUpDef(type) {
+  const registry = (typeof window !== 'undefined' && window.GALABOB)
+    ? window.GALABOB.powerUps
+    : null;
+  if (registry) return registry.resolve(type, 'double');
   if (type && typeof type === 'object' && type.key) return type;
   const raw = String(type == null ? '' : type);
   let d = POWERUP_BY_KEY[raw];
@@ -256,6 +161,18 @@ function _powerUpWeight(def) {
 
 /** Tire un type au sort à la roulette pondérée. @returns {string} clé */
 function rollPowerUpType() {
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  if (runtime && runtime.powerUps) {
+    const p = (typeof player !== 'undefined' && player) ? player : {};
+    return runtime.powerUps.weightedRoll({
+      lives: p.lives,
+      shield: p.shield,
+      shieldMax: (typeof PLAYER_SHIELD_MAX === 'number') ? PLAYER_SHIELD_MAX : 3,
+      weapon: p.weapon,
+      weaponLevel: p.weaponLevel
+    }, runtime.random ? () => runtime.random.next() : Math.random);
+  }
+
   let total = 0;
   const weights = new Array(POWERUP_TYPES.length);
   for (let i = 0; i < POWERUP_TYPES.length; i++) {
@@ -277,6 +194,11 @@ function rollPowerUpType() {
  *  3. CRÉATION
  * ========================================================================== */
 
+function _powerUpRandom() {
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  return runtime && runtime.random ? runtime.random.next() : Math.random();
+}
+
 /** Crée un power-up. Signature historique conservée :
  *      powerUps.push(createPowerUp(x, y))
  *  @param {string} [forcedType] force un type précis (debug, scénarisation) */
@@ -295,9 +217,10 @@ function createPowerUp(x, y, forcedType) {
     speed: TEMPO.POWERUP_FALL_SPEED,     // px/s
     vx: 0,
     vy: TEMPO.POWERUP_FALL_SPEED,        // px/s
-    spin: Math.random() * Math.PI * 2,
-    spinRate: randSign() * randRange(1.2, 2.2),   // rad/s
-    phase: Math.random() * Math.PI * 2,
+    spin: _powerUpRandom() * Math.PI * 2,
+    spinRate: (_powerUpRandom() < 0.5 ? -1 : 1) *
+      (1.2 + _powerUpRandom()),                  // rad/s
+    phase: _powerUpRandom() * Math.PI * 2,
     age: 0,
     magnet: false
   };
@@ -413,8 +336,20 @@ function applyPowerUp(type, x, y) {
 
   let label = def.label;
   let extraEvent = null;
+  let handledByMode = false;
 
-  switch (def.slot) {
+  // Certains modes remplacent la minuterie par une économie de munitions.
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  if (mode && typeof mode.collectPowerUp === 'function') {
+    const result = mode.collectPowerUp({ definition: def, x: x, y: y });
+    if (result && result.handled) {
+      handledByMode = true;
+      label = result.label || def.label;
+    }
+  }
+
+  if (!handledByMode) switch (def.slot) {
 
     /* --- EMPLACEMENT 1 : arme principale, EXCLUSIVE ---------------------- */
     case 'weapon': {
@@ -456,6 +391,14 @@ function applyPowerUp(type, x, y) {
       } else if (def.key === 'bombe') {
         triggerPowerUpBomb(x, y);
         label = 'BOMBE';
+      } else if (def.key === 'arsenal') {
+        const duration = def.effectDuration || TEMPO.POWERUP_DURATION_MS;
+        if (typeof setPlayerWeapon === 'function') {
+          setPlayerWeapon('double', duration);
+          setPlayerWeapon('spread', duration);
+          setPlayerWeapon('missiles', duration);
+        }
+        label = 'ARSENAL COMPLET';
       }
       break;
     }
@@ -961,6 +904,7 @@ if (typeof window !== 'undefined') {
  *  EXPOSITION EXPLICITE
  * -------------------------------------------------------------------------- */
 window.POWERUP_TYPES = POWERUP_TYPES;
+window.POWERUP_ALIASES = POWERUP_ALIASES;
 window.POWERUP_DROP_CHANCE = POWERUP_DROP_CHANCE;
 window.powerUpDef = powerUpDef;
 window.powerUpColor = powerUpColor;

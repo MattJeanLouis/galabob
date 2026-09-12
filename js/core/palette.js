@@ -126,6 +126,9 @@ const PALETTE = (function () {
     enemyShooter: T('#e8d9ff', '#9d5bff', '#9d5bff'),  // violet électrique
     enemyFast:    T('#fff1d2', '#ffb03a', '#ffb03a'),  // ambre / blanc chaud
     enemyElite:   T('#ffffff', '#ff2b55', '#ff2b55'),  // rouge néon
+    enemyArmored: T('#fff0d8', '#ff641f', '#ff8a38'),  // blindage orange incandescent
+    enemySniper:  T('#f8e8ff', '#d45bff', '#ed9dff'),  // éclat violet très pâle
+    enemyAsteroid:T('#fff0d8', '#b58a62', '#e0b27b'),  // roche chaude, distincte des tirs
     enemyDiving:  T('#ffffff', '#ff5ad0', '#ff2bd6'),  // teinte de plongée (télégraphie)
 
     /* --- projectiles joueur : famille cyan → blanc chaud --- */
@@ -137,6 +140,8 @@ const PALETTE = (function () {
     bulletEnemy:        T('#ffe3e9', '#ff2b55', '#ff2b55'),
     bulletEnemyShooter: T('#ffe0f2', '#ff3fa8', '#ff3fa8'),
     bulletEnemyFast:    T('#fff0dd', '#ff7a2b', '#ff7a2b'),
+    bulletEnemyArmored: T('#fff0dd', '#ff641f', '#ff641f'),
+    bulletEnemySniper:  T('#fff5ff', '#e58aff', '#e58aff'),
 
     /* --- power-ups : vert menthe / or, jamais confondables avec la menace --- */
     powerupDouble: T('#ffffff', '#00ffc8', '#00ffc8'),
@@ -211,10 +216,16 @@ const PALETTE = (function () {
   reg('enemy.shooter', entities.enemyShooter);
   reg('enemy.fast', entities.enemyFast);
   reg('enemy.elite', entities.enemyElite);
+  reg('enemy.armored', entities.enemyArmored);
+  reg('enemy.sniper', entities.enemySniper);
+  reg('enemy.asteroid', entities.enemyAsteroid);
   reg('normal', entities.enemyNormal);      // createExplosion(x, y, 'normal')
   reg('shooter', entities.enemyShooter);    // createExplosion(x, y, 'shooter')
   reg('fast', entities.enemyFast);          // createExplosion(x, y, 'fast')
   reg('elite', entities.enemyElite);
+  reg('armored', entities.enemyArmored);
+  reg('sniper', entities.enemySniper);
+  reg('asteroid', entities.enemyAsteroid);
   reg('enemy', entities.enemyNormal);
   reg('ram', entities.enemyElite);
 
@@ -226,6 +237,8 @@ const PALETTE = (function () {
   reg('bullet.enemy.normal', entities.bulletEnemy);
   reg('bullet.enemy.shooter', entities.bulletEnemyShooter);
   reg('bullet.enemy.fast', entities.bulletEnemyFast);
+  reg('bullet.enemy.armored', entities.bulletEnemyArmored);
+  reg('bullet.enemy.sniper', entities.bulletEnemySniper);
 
   reg('weapon.normal', entities.bulletPlayer);
   reg('weapon.double', entities.bulletDouble);

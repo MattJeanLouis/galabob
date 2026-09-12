@@ -58,16 +58,45 @@
  *  dépasse largement le stage 20-1 (3,40).
  * ========================================================================== */
 
+const ARCADE_PROGRESSION = window.GALABOB_ARCADE_PROGRESSION;
+if (!ARCADE_PROGRESSION) {
+  throw new Error('La progression Arcade doit etre chargee avant stages.js');
+}
+
 const PROGRESSION = {
-  MAX_STAGE: 20,          // stages par boucle
-  SPAN: 3.4,              // rapport de menace entre le stage 20 et le stage 1
-  LOOP_MULT: 1.4,         // surcharge cumulative par boucle, à position égale
-  BOSS_EVERY: 5,          // stages 5, 10, 15, 20
-  LIVES_REF: 3            // vies de référence pour l'estimation de survie
+  MAX_STAGE: ARCADE_PROGRESSION.stageCount,
+  SPAN: ARCADE_PROGRESSION.threatSpan,
+  LOOP_MULT: ARCADE_PROGRESSION.loopMultiplier,
+  BOSS_EVERY: ARCADE_PROGRESSION.bossEvery,
+  LIVES_REF: ARCADE_PROGRESSION.referenceLives
 };
+
+function _stageGameplayRandom() {
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  return runtime && runtime.random ? runtime.random.next() : Math.random();
+}
 
 // Décalage de progression apporté par une boucle complète.
 PROGRESSION.LOOP_STEP = 1 + Math.log(PROGRESSION.LOOP_MULT) / Math.log(PROGRESSION.SPAN);
+
+function _activeProgression() {
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  return (mode && mode.progression) || ARCADE_PROGRESSION;
+}
+
+function _activeProgressionValues() {
+  const content = _activeProgression();
+  return {
+    content,
+    maxStage: content.stageCount,
+    span: content.threatSpan,
+    loopMultiplier: content.loopMultiplier,
+    bossEvery: content.bossEvery,
+    lives: content.referenceLives,
+    loopStep: 1 + Math.log(content.loopMultiplier) / Math.log(content.threatSpan)
+  };
+}
 
 /** Courbe de confort : douce au début, franche ensuite. courbe(0)=0, courbe(1)=1. */
 function courbeMenace(k) {
@@ -83,15 +112,17 @@ function _rampe(x, a, b) {
 
 /** Progression absolue (en boucles) d'un stage donné. */
 function progressionAbsolue(stage, loop) {
-  const s = clamp(Math.round(stage) || 1, 1, PROGRESSION.MAX_STAGE);
+  const progression = _activeProgressionValues();
+  const s = clamp(Math.round(stage) || 1, 1, progression.maxStage);
   const l = Math.max(0, Math.round(loop) || 0);
-  return (s - 1) / (PROGRESSION.MAX_STAGE - 1) + l * PROGRESSION.LOOP_STEP;
+  return (s - 1) / Math.max(1, progression.maxStage - 1) + l * progression.loopStep;
 }
 
 /** Un stage est-il un stage de BOSS ? (5, 10, 15, 20 de chaque boucle) */
 function estStageDeBoss(stage) {
+  const progression = _activeProgressionValues();
   const s = Math.round(stage) || 1;
-  return s > 0 && (s % PROGRESSION.BOSS_EVERY) === 0;
+  return s > 0 && (s % progression.bossEvery) === 0;
 }
 
 /* --- cache : la menace d'un stage ne change pas d'une frame à l'autre ------ */
@@ -106,9 +137,11 @@ const _menaceCache = {};
  *  @param {number} loop  0 = première boucle
  */
 function menaceFor(stage, loop) {
-  const s = clamp(Math.round(stage) || 1, 1, PROGRESSION.MAX_STAGE);
+  const progression = _activeProgressionValues();
+  const s = clamp(Math.round(stage) || 1, 1, progression.maxStage);
   const l = Math.max(0, Math.round(loop) || 0);
-  const cle = s + ':' + l;
+  const mode = window.GALABOB && window.GALABOB.modes ? window.GALABOB.modes.current() : null;
+  const cle = (mode ? mode.id : 'arcade') + ':' + s + ':' + l;
   if (_menaceCache[cle]) return _menaceCache[cle];
 
   const p = progressionAbsolue(s, l);
@@ -117,11 +150,16 @@ function menaceFor(stage, loop) {
   // Surcharge cumulative : 1,35^1,275 ≈ ×1,47 par boucle à position égale.
   // C'est ce qui empêche la boucle 2 de repartir au niveau de la boucle 1.
   const boost = Math.pow(1.35, sur);
-  const menace = Math.pow(PROGRESSION.SPAN, p);  // scalaire lisible (1 -> 3,4 -> …)
+  const menace = Math.pow(progression.span, p);
 
   // « Stage équivalent » : sert aux déblocages (types d'ennemis, compositions)
   // pour que les boucles suivantes gardent TOUT débloqué.
-  const stageEq = 1 + p * (PROGRESSION.MAX_STAGE - 1);
+  const stageEq = 1 + p * (progression.maxStage - 1);
+  const bossCount = (typeof BOSS !== 'undefined' && BOSS && typeof BOSS.count === 'function')
+    ? BOSS.count() : 6;
+  const bossAbsoluteIndex = estStageDeBoss(s)
+    ? (Math.floor(s / progression.bossEvery) - 1) + l * (progression.maxStage / progression.bossEvery)
+    : -1;
 
   /* --- proportions de types : les élites et les béliers arrivent TARD ----- */
   const wShooter = _rampe(stageEq, 2, 7) * 0.30;
@@ -141,13 +179,10 @@ function menaceFor(stage, loop) {
     menace: menace,
     boss: estStageDeBoss(s),
     // bossIndex : numéro ABSOLU du boss (croît d'une boucle à l'autre).
-    // bossSlot  : lequel des quatre boss (0..3) — c'est CE numéro qu'attend
-    //             BOSS.spawn(), et les boucles refont donc le même carrousel,
-    //             mais avec une menace plus haute.
-    bossIndex: estStageDeBoss(s)
-      ? (Math.floor(s / PROGRESSION.BOSS_EVERY) - 1) + l * (PROGRESSION.MAX_STAGE / PROGRESSION.BOSS_EVERY)
-      : -1,
-    bossSlot: estStageDeBoss(s) ? (Math.floor(s / PROGRESSION.BOSS_EVERY) - 1) % 4 : -1,
+    // bossSlot continue le carrousel entre les boucles : un mode court finit
+    // donc lui aussi par montrer tout le catalogue et ses variantes.
+    bossIndex: bossAbsoluteIndex,
+    bossSlot: bossAbsoluteIndex >= 0 ? bossAbsoluteIndex % bossCount : -1,
     // Menace transmise à js/entities/boss.js, QUI ATTEND UN NOMBRE de 1 à 6
     // (REGLAGES.menaceMax) : la courbe continue y est projetée.
     bossMenace: clamp(1 + p * 2.0, 1, 6),
@@ -205,6 +240,17 @@ function menaceFor(stage, loop) {
     }
   };
 
+  const rules = progression.content.rules || {};
+  m.budget = Math.round(m.budget * (rules.budgetMultiplier || 1));
+  m.premiereVague = Math.round(m.premiereVague * (rules.fieldMultiplier || 1));
+  m.fieldTarget = Math.round(m.fieldTarget * (rules.fieldMultiplier || 1));
+  m.vitesseFormation *= rules.formationSpeedMultiplier || 1;
+  m.tirMult *= rules.shotMultiplier || 1;
+  if (rules.disableDives) {
+    m.plongeeMult = 0;
+    m.plongeursMax = 0;
+  }
+
   m.fieldReinforce = Math.max(2, Math.round(m.fieldTarget * 0.68));
 
   // Période moyenne d'une salve dans enemies.js : enemyShotInterval (2600 ms).
@@ -246,19 +292,16 @@ function menaceFor(stage, loop) {
  *  Un thème tous les 4 stages. Sert à la transition (elle PRÉSENTE le décor
  *  suivant) et peut être lu par le fond stellaire — voir `stageSystem.theme()`.
  * ========================================================================== */
-const STAGE_THEMES = [
-  { key: 'aurore',    nom: 'AURORE',     accent: 'player',       grille: 'player',       densite: 0.9, horizon: 0.62 },
-  { key: 'nebuleuse', nom: 'NÉBULEUSE',  accent: 'enemyNormal',  grille: 'enemyNormal',  densite: 1.1, horizon: 0.58 },
-  { key: 'ceinture',  nom: 'CEINTURE',   accent: 'enemyFast',    grille: 'enemyFast',    densite: 1.0, horizon: 0.66 },
-  { key: 'abime',     nom: 'ABÎME',      accent: 'enemyShooter', grille: 'enemyShooter', densite: 0.8, horizon: 0.54 },
-  { key: 'coeur',     nom: 'CŒUR',       accent: 'enemyElite',   grille: 'enemyElite',   densite: 1.2, horizon: 0.70 }
-];
+const STAGE_THEMES = ARCADE_PROGRESSION.themes;
 
 /** Thème d'un stage donné. Ne renvoie jamais null. */
 function stageThemeFor(stage, loop) {
-  const s = clamp(Math.round(stage) || 1, 1, PROGRESSION.MAX_STAGE);
-  const i = Math.min(STAGE_THEMES.length - 1, Math.floor((s - 1) / 4));
-  const base = STAGE_THEMES[i];
+  const progression = _activeProgressionValues();
+  const themes = progression.content.themes;
+  const s = clamp(Math.round(stage) || 1, 1, progression.maxStage);
+  const stagesPerTheme = Math.max(1, Math.ceil(progression.maxStage / themes.length));
+  const i = Math.min(themes.length - 1, Math.floor((s - 1) / stagesPerTheme));
+  const base = themes[i];
   return {
     key: base.key,
     nom: base.nom,
@@ -276,28 +319,7 @@ function stageThemeFor(stage, loop) {
  *  joueur voit arriver quelque chose qu'il n'avait pas vu la veille, et la
  *  nouveauté est temporairement sur-pondérée pour qu'il la remarque.
  * ========================================================================== */
-const STAGE_COMPOSITIONS = [
-  { nom: 'RANG SERRÉ',    f: 'grid',      c: 'curveLeft',  stage: 1,  poids: 1.00, taille: 0.90 },
-  { nom: 'DOUBLE LIGNE',  f: 'doubleRow', c: 'curveRight', stage: 2,  poids: 1.00, taille: 0.95 },
-  { nom: 'CROISEMENT',    f: 'grid',      c: 'split',      stage: 3,  poids: 0.95, taille: 1.00 },
-  { nom: 'PENDULE',       f: 'doubleRow', c: 'zigzag',     stage: 4,  poids: 0.95, taille: 1.00 },
-  { nom: 'LOSANGE',       f: 'diamond',   c: 'curveRight', stage: 5,  poids: 0.95, taille: 0.95 },
-  { nom: 'TENAILLE',      f: 'diamond',   c: 'split',      stage: 6,  poids: 0.95, taille: 1.00 },
-  { nom: 'GRILLE FOLLE',  f: 'grid',      c: 'zigzag',     stage: 7,  poids: 0.90, taille: 1.05 },
-  { nom: 'CARROUSEL',     f: 'circle',    c: 'curveLeft',  stage: 8,  poids: 1.00, taille: 0.95 },
-  { nom: 'FRONDE',        f: 'doubleRow', c: 'split',      stage: 9,  poids: 0.90, taille: 1.05 },
-  { nom: 'ANNEAU BRISÉ',  f: 'circle',    c: 'split',      stage: 10, poids: 0.95, taille: 1.00 },
-  { nom: 'VRILLE',        f: 'grid',      c: 'spiral',     stage: 11, poids: 0.95, taille: 1.05 },
-  { nom: 'DIADÈME',       f: 'diamond',   c: 'zigzag',     stage: 12, poids: 0.90, taille: 1.05 },
-  { nom: 'SPIRALE',       f: 'circle',    c: 'spiral',     stage: 13, poids: 1.00, taille: 1.00 },
-  { nom: 'HERSE',         f: 'doubleRow', c: 'spiral',     stage: 14, poids: 0.90, taille: 1.10 },
-  { nom: 'POINTE',        f: 'diamond',   c: 'curveLeft',  stage: 15, poids: 0.90, taille: 1.05 },
-  { nom: 'ORBITE',        f: 'circle',    c: 'zigzag',     stage: 16, poids: 0.95, taille: 1.05 },
-  { nom: 'ÉTAU',          f: 'diamond',   c: 'spiral',     stage: 17, poids: 0.95, taille: 1.10 },
-  { nom: 'MURAILLE',      f: 'grid',      c: 'curveRight', stage: 18, poids: 0.90, taille: 1.15 },
-  { nom: 'MAELSTRÖM',     f: 'circle',    c: 'curveRight', stage: 19, poids: 1.00, taille: 1.10 },
-  { nom: 'JUGEMENT',      f: 'doubleRow', c: 'curveLeft',  stage: 20, poids: 1.00, taille: 1.15 }
-];
+const STAGE_COMPOSITIONS = ARCADE_PROGRESSION.compositions;
 
 /** Poids courant d'une composition : 0 si pas encore débloquée, majoré juste
  *  après son déblocage (nouveauté), puis stabilisé — jamais nul ensuite. */
@@ -312,19 +334,25 @@ function poidsComposition(comp, stageEq) {
  *  @param {object} m menace du stage
  *  @param {string} eviter nom d'une composition à éviter (anti-répétition) */
 function tirerComposition(m, eviter) {
+  const progression = _activeProgression();
+  const compositions = progression.compositions;
+  if (progression.rules && progression.rules.scriptedCompositions) {
+    const index = Math.max(0, (Math.round(m.stage) || 1) - 1) % compositions.length;
+    return compositions[index];
+  }
   const dispo = [];
   let total = 0;
-  for (let i = 0; i < STAGE_COMPOSITIONS.length; i++) {
-    const comp = STAGE_COMPOSITIONS[i];
+  for (let i = 0; i < compositions.length; i++) {
+    const comp = compositions[i];
     let w = poidsComposition(comp, m.stageEq);
     if (w <= 0) continue;
     if (eviter && comp.nom === eviter) w *= 0.12;   // on ne l'interdit pas, on la rend rare
     dispo.push({ comp: comp, w: w });
     total += w;
   }
-  if (!dispo.length) return STAGE_COMPOSITIONS[0];
+  if (!dispo.length) return compositions[0];
 
-  let r = Math.random() * total;
+  let r = _stageGameplayRandom() * total;
   for (let i = 0; i < dispo.length; i++) {
     r -= dispo[i].w;
     if (r <= 0) return dispo[i].comp;
@@ -335,8 +363,9 @@ function tirerComposition(m, eviter) {
 /** Une composition est-elle déjà débloquée ? (utilisé par le gouverneur pour
  *  empêcher les vagues de renfort de sortir une chorégraphie non débloquée) */
 function compositionDebloquee(formation, choreographie, stageEq) {
-  for (let i = 0; i < STAGE_COMPOSITIONS.length; i++) {
-    const c = STAGE_COMPOSITIONS[i];
+  const compositions = _activeProgression().compositions;
+  for (let i = 0; i < compositions.length; i++) {
+    const c = compositions[i];
     if (c.f === formation && c.c === choreographie) return stageEq + 0.001 >= c.stage;
   }
   return true;   // combinaison inconnue de la table : on ne bloque pas
@@ -1006,6 +1035,13 @@ const stageSystem = {
     try {
       installStageGovernor();                        // idempotent
 
+      this.maxStage = _activeProgression().stageCount;
+
+      const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+      if (runtime && typeof runtime.beginStageRandom === 'function') {
+        runtime.beginStageRandom(this.currentStage, this.loopCount);
+      }
+
       const m = this.menace();
 
       this.enemiesPerStage = m.budget;
@@ -1014,7 +1050,7 @@ const stageSystem = {
       // `enemySpeed` est l'ancien scalaire hérité : il repart à 1 et gagne +0.2
       // par vague survivante (game.js). getFormationSpeed() en fait un bonus.
       enemySpeed = 1;
-      enemyDirection = Math.random() < 0.5 ? -1 : 1;
+      enemyDirection = _stageGameplayRandom() < 0.5 ? -1 : 1;
       enemyShotTimer = 1200;
 
       playerBullets = [];
@@ -1415,6 +1451,14 @@ const stageSystem = {
           boss: this.isBossStage()
         });
       }
+      const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+      if (runtime && runtime.modes) {
+        runtime.modes.call('startStage', {
+          stage: this.currentStage,
+          loop: this.loopCount,
+          boss: this.isBossStage()
+        });
+      }
       if (typeof setStarWarp === 'function') setStarWarp(4, 320);
     } catch (e) { /* ignoré */ }
   },
@@ -1653,7 +1697,7 @@ const stageSystem = {
     if (m.boss) danger *= 1.55;
     if (danger < 0.0005) danger = 0.0005;
 
-    const vies = PROGRESSION.LIVES_REF;
+    const vies = _activeProgressionValues().lives;
     return Math.round((vies * (1 / danger + 1.92)) * 10) / 10;
   },
 
@@ -1661,7 +1705,7 @@ const stageSystem = {
   debugCurve(loop) {
     const l = loop || 0;
     const lignes = [];
-    for (let s = 1; s <= PROGRESSION.MAX_STAGE; s++) {
+    for (let s = 1; s <= _activeProgressionValues().maxStage; s++) {
       const m = menaceFor(s, l);
       lignes.push(
         'stage ' + String(m.label).padStart(5) +
@@ -1715,7 +1759,7 @@ function rosterSelonMenace(count, m) {
 
   // Mélange de Fisher-Yates : la rangée avant ne doit pas être triée par type.
   for (let i = roster.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = Math.floor(_stageGameplayRandom() * (i + 1));
     const tmp = roster[i]; roster[i] = roster[j]; roster[j] = tmp;
   }
   return roster;
@@ -1724,7 +1768,7 @@ function rosterSelonMenace(count, m) {
 /** Tire UN type d'ennemi selon la répartition de la menace. */
 function tirerTypeSelonMenace(m) {
   const t = m.types;
-  let r = Math.random();
+  let r = _stageGameplayRandom();
   if ((r -= t.normal) < 0) return 'normal';
   if ((r -= t.shooter) < 0) return 'shooter';
   if ((r -= t.fast) < 0) return 'fast';
@@ -1814,7 +1858,7 @@ function spawnBossSafely(index, menace) {
  * ========================================================================== */
 
 function determineEnemyType(normalRatio, shooterRatio, fastRatio) {
-  const r = Math.random();
+  const r = _stageGameplayRandom();
   if (r < normalRatio) return "normal";
   if (r < normalRatio + shooterRatio) return "shooter";
   return "fast";
@@ -1997,7 +2041,7 @@ function installStageGovernor() {
     O.volley = orig;
     triggerEnemyVolley = marque(function (stage) {
       if (!STAGE_GOVERNOR.enabled) return orig(stage);
-      if (Math.random() > _menaceCourante().salveChance) return;  // salve sautée
+      if (_stageGameplayRandom() > _menaceCourante().salveChance) return;  // salve sautée
       return orig(stage);
     }, 'volley');
   }
@@ -2112,16 +2156,16 @@ function updateStarsTransition(deltaTime) {
  *  • stageSystem.currentTheme()           -> thème de décor courant
  *  • stageSystem.theme(stage, loop)       -> thème d'un stage donné
  *  • stageSystem.stageLabel()             -> « 3-2 »
- *  • stageSystem.isBossStage(stage)       -> true aux stages 5/10/15/20
+ *  • stageSystem.isBossStage(stage)       -> true selon le rythme du mode
  *  • stageSystem.notifyBossDefeated(info) -> à appeler à la mort du boss
  *  • stageBossDefeated(info)              -> même chose, en global
  *
  *  CONTRAT BOSS (aligné sur l'API réelle de js/entities/boss.js)
  *  ------------------------------------------------------------
- *  À l'entrée d'un stage 5/10/15/20, stages.js appelle, dans l'ordre :
+ *  À l'entrée d'un stage de boss, stages.js appelle, dans l'ordre :
  *      spawnBoss(slot, menace)        si ce global existe,
  *      sinon BOSS.spawn(slot, menace).
- *  `slot` vaut 0..3 (identique à BOSS.indexForStage(stage)) et `menace` est
+ *  `slot` désigne une entrée du catalogue BOSS et `menace` est
  *  l'objet complet dont le valueOf() renvoie menace.bossMenace, un NOMBRE de
  *  1 à 6 — exactement ce qu'attend BOSS.spawn(). Le stage reste ouvert tant
  *  que BOSS.isDefeated() est faux (l'agonie se joue donc en entier) ; il se

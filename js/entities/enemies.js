@@ -71,6 +71,11 @@ const TWO_PI = Math.PI * 2;
  *  Maintenant : CECI, et rien d'autre. Les couleurs viennent de PALETTE.
  * ========================================================================== */
 const ENEMY_TYPES = {
+  bonus: {
+    key: 'bonus', paletteKey: '#ffee55', bulletKey: 'bullet.enemy',
+    hp: 2, points: 50, size: 48, speed: 1.8,
+    shot: 'single', shotRate: 0, shotSpeed: 0, cooldown: 999999, diveBias: 0
+  },
   normal: {
     key: 'normal',
     paletteKey: 'enemy.normal',        // magenta franc
@@ -114,6 +119,26 @@ const ENEMY_TYPES = {
     shotSpeed: TEMPO.ENEMY_BULLET_SPEED_SHOOTER * 1.05,
     cooldown: 1150,
     diveBias: 1.15
+  },
+  armored: {
+    key: 'armored', paletteKey: 'enemy.armored', bulletKey: 'bullet.enemy.armored',
+    hp: 2, points: 45, size: 58, speed: 0.72,
+    shot: 'spread3', shotRate: 0.28,
+    shotSpeed: TEMPO.ENEMY_BULLET_SPEED * 0.82,
+    cooldown: 1450, diveBias: 0.20
+  },
+  sniper: {
+    key: 'sniper', paletteKey: 'enemy.sniper', bulletKey: 'bullet.enemy.sniper',
+    hp: 1, points: 35, size: 46, speed: 0.88,
+    shot: 'single', shotRate: 0.25,
+    shotSpeed: TEMPO.ENEMY_BULLET_SPEED_SHOOTER * 1.58,
+    cooldown: 1700, diveBias: 0.35, telegraphMultiplier: 1.65
+  },
+  asteroid: {
+    key: 'asteroid', paletteKey: 'enemy.asteroid', bulletKey: 'bullet.enemy',
+    hp: 6, points: 0, size: 64, speed: 1,
+    shot: 'single', shotRate: 0, shotSpeed: 0,
+    cooldown: 999999, diveBias: 0
   }
 };
 
@@ -134,6 +159,15 @@ function enemySizeFor(type) {
   const st = enemyStats(type);
   const scale = clamp(CANVAS_WIDTH / 1200, 0.72, 1.25);
   return Math.round(st.size * scale);
+}
+
+/** Règles du mode courant, sans rendre la fabrique dépendante d'un mode. */
+function currentEnemyModeRules() {
+  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  return mode && mode.progression && mode.progression.rules
+    ? mode.progression.rules
+    : {};
 }
 
 /* -----------------------------------------------------------------------------
@@ -317,22 +351,34 @@ function formationTopY() { return clamp(CANVAS_HEIGHT * 0.12, 78, 160); }
 
 /** Répartition des types pour une vague. Renvoie EXACTEMENT `count` entrées. */
 function buildTypeRoster(count, stage) {
-  let normalRatio = 0.70, shooterRatio = 0.15, fastRatio = 0.15, eliteRatio = 0;
+  let normalRatio = 1, shooterRatio = 0, fastRatio = 0, eliteRatio = 0;
+  let armoredRatio = 0, sniperRatio = 0;
 
-  if (stage >= 3) { normalRatio = 0.50; shooterRatio = 0.25; fastRatio = 0.25; eliteRatio = 0; }
-  if (stage >= 5) { normalRatio = 0.36; shooterRatio = 0.27; fastRatio = 0.27; eliteRatio = 0.10; }
-  if (stage >= 8) { normalRatio = 0.28; shooterRatio = 0.30; fastRatio = 0.28; eliteRatio = 0.14; }
+  if (stage >= 2) { normalRatio = 0.70; shooterRatio = 0.15; fastRatio = 0.15; }
+  if (stage >= 3) { normalRatio = 0.48; shooterRatio = 0.22; fastRatio = 0.20; sniperRatio = 0.10; }
+  if (stage >= 5) {
+    normalRatio = 0.34; shooterRatio = 0.22; fastRatio = 0.18;
+    eliteRatio = 0.10; sniperRatio = 0.10; armoredRatio = 0.06;
+  }
+  if (stage >= 8) {
+    normalRatio = 0.24; shooterRatio = 0.20; fastRatio = 0.16;
+    eliteRatio = 0.14; sniperRatio = 0.14; armoredRatio = 0.12;
+  }
 
   const roster = [];
   const nShooter = Math.round(count * shooterRatio);
   const nFast = Math.round(count * fastRatio);
   const nElite = Math.round(count * eliteRatio);
-  const nNormal = Math.max(0, count - nShooter - nFast - nElite);
+  const nArmored = Math.round(count * armoredRatio);
+  const nSniper = Math.round(count * sniperRatio);
+  const nNormal = Math.max(0, count - nShooter - nFast - nElite - nArmored - nSniper);
 
   for (let i = 0; i < nNormal; i++) roster.push('normal');
   for (let i = 0; i < nShooter; i++) roster.push('shooter');
   for (let i = 0; i < nFast; i++) roster.push('fast');
   for (let i = 0; i < nElite; i++) roster.push('elite');
+  for (let i = 0; i < nArmored; i++) roster.push('armored');
+  for (let i = 0; i < nSniper; i++) roster.push('sniper');
   while (roster.length < count) roster.push('normal');
   roster.length = count;
 
@@ -366,6 +412,51 @@ function calculateFormationPositions(formationType, count) {
   const maxCols = Math.max(2, Math.floor((CANVAS_WIDTH - margin * 2) / spacing));
 
   switch (formationType) {
+
+    case FORMATIONS.WEDGE: {
+      // Pointe en avant puis rangées de plus en plus larges.
+      let left = n, row = 0;
+      while (left > 0) {
+        const take = Math.min(left, maxCols, row + 1);
+        pushFormationRow(positions, take, topY + row * spacing * 0.86, spacing, centerX, n);
+        left -= take;
+        row++;
+      }
+      break;
+    }
+
+    case FORMATIONS.ARC: {
+      const cols = Math.max(3, Math.min(maxCols, n));
+      let row = 0;
+      while (positions.length < n) {
+        const take = Math.min(cols, n - positions.length);
+        for (let col = 0; col < take; col++) {
+          const nx = take <= 1 ? 0 : (col / (take - 1)) * 2 - 1;
+          positions.push({
+            x: centerX + (col - (take - 1) / 2) * spacing,
+            y: topY + row * spacing * 0.92 + Math.abs(nx) * spacing * 0.62
+          });
+        }
+        row++;
+      }
+      break;
+    }
+
+    case FORMATIONS.COLUMNS: {
+      const cols = Math.min(n, Math.max(2, Math.min(4, maxCols)));
+      const rows = Math.ceil(n / cols);
+      for (let row = 0; row < rows; row++) {
+        const take = Math.min(cols, n - positions.length);
+        // Les colonnes impaires sont légèrement avancées : effet de phalange.
+        for (let col = 0; col < take; col++) {
+          positions.push({
+            x: centerX + (col - (cols - 1) / 2) * spacing * 1.18,
+            y: topY + row * spacing * 0.90 + (col % 2) * spacing * 0.26
+          });
+        }
+      }
+      break;
+    }
 
     case FORMATIONS.DIAMOND: {
       // Rangées symétriques 1,3,5,…,5,3,1 tronquées pour totaliser EXACTEMENT n.
@@ -444,15 +535,56 @@ function calculateFormationPositions(formationType, count) {
   positions.length = n;
 
   // Tout doit rester à l'écran, avec de la marge pour la marche latérale.
-  const half = enemySizeFor('elite') / 2;
+  const rules = currentEnemyModeRules();
+  const scale = rules.enemyScale || 1;
+  const half = enemySizeFor('elite') * scale / 2;
   const lo = margin + half;
   const hi = CANVAS_WIDTH - margin - half;
+  const maxY = CANVAS_HEIGHT * (rules.formationMaxY || 0.45);
   for (let i = 0; i < positions.length; i++) {
     positions[i].x = clamp(positions[i].x, lo, Math.max(lo, hi));
-    positions[i].y = clamp(positions[i].y, 40, CANVAS_HEIGHT * 0.45);
+    positions[i].y = clamp(positions[i].y, 40 + half, maxY - half);
   }
 
   return positions;
+}
+
+/** Écarte les ancres qui se touchent après adaptation de taille ou clamp. */
+function separateFormationPositions(positions, roster, scale) {
+  const rules = currentEnemyModeRules();
+  const margin = formationMargin();
+  const maxY = CANVAS_HEIGHT * (rules.formationMaxY || 0.45);
+  const padding = Math.max(7, formationSpacing() * 0.12);
+
+  for (let pass = 0; pass < 28; pass++) {
+    let moved = false;
+    for (let i = 0; i < positions.length; i++) {
+      for (let j = i + 1; j < positions.length; j++) {
+        let dx = positions[j].x - positions[i].x;
+        let dy = positions[j].y - positions[i].y;
+        let distance = Math.hypot(dx, dy);
+        const ri = enemySizeFor(roster[i]) * scale / 2;
+        const rj = enemySizeFor(roster[j]) * scale / 2;
+        const wanted = ri + rj + padding;
+        if (distance >= wanted) continue;
+        if (distance < 0.01) {
+          const angle = (i * 2.17 + j * 0.91) % TWO_PI;
+          dx = Math.cos(angle); dy = Math.sin(angle); distance = 1;
+        }
+        const push = (wanted - distance) * 0.52;
+        const ux = dx / distance, uy = dy / distance;
+        positions[i].x -= ux * push; positions[i].y -= uy * push;
+        positions[j].x += ux * push; positions[j].y += uy * push;
+        moved = true;
+      }
+    }
+    for (let i = 0; i < positions.length; i++) {
+      const radius = enemySizeFor(roster[i]) * scale / 2;
+      positions[i].x = clamp(positions[i].x, margin + radius, CANVAS_WIDTH - margin - radius);
+      positions[i].y = clamp(positions[i].y, 40 + radius, maxY - radius);
+    }
+    if (!moved) break;
+  }
 }
 
 /** Chemins d'entrée (courbes de Bézier) selon la chorégraphie.
@@ -557,34 +689,70 @@ function entryRateFor(path, start, target) {
 function createFormation(count, formationType, choreographyType, stage, append) {
   stage = stage || 1;
 
-  let driftX = 0, driftY = 0, indexBase = 0;
+  let driftX = 0, driftY = 0, indexBase = 0, appendTop = Infinity, appendBottom = -Infinity;
 
   if (append) {
     // Dérive courante de la formation en place (marche latérale + descentes).
     let minX = Infinity, maxX = -Infinity, minY = Infinity, live = 0;
     for (let i = 0; i < enemies.length; i++) {
       const e = enemies[i];
-      if (!e || e.isDeleted || typeof e.formationX !== 'number') continue;
+      if (!e || e.isDeleted || e.isBonus || e.isHazard || typeof e.formationX !== 'number') continue;
       live++;
       if (e.formationX < minX) minX = e.formationX;
       if (e.formationX + e.width > maxX) maxX = e.formationX + e.width;
       if (e.formationY < minY) minY = e.formationY;
+      if (e.formationY + e.height > appendBottom) appendBottom = e.formationY + e.height;
     }
     if (live > 0) {
       driftX = ((minX + maxX) / 2) - CANVAS_WIDTH / 2;
-      driftY = minY - (formationTopY() - 22);   // 22 ≈ demi-hauteur d'ennemi
+      appendTop = minY;
     }
     indexBase = enemies.length;
   } else {
     enemies = [];
     enemyDirection = Math.random() < 0.5 ? -1 : 1;
     enemyShotTimer = enemyShotInterval * 0.9;
-    waveGraceMs = 1100;
+    const rules = currentEnemyModeRules();
+    waveGraceMs = rules.entryGraceMs == null ? 1100 : rules.entryGraceMs;
   }
 
   const size = clamp(Math.floor(count) || 1, 1, 34);
   const roster = buildTypeRoster(size, stage);
-  const positions = calculateFormationPositions(formationType, size);
+  // Un renfort est une rangée de relève nette. La forme spectaculaire reste
+  // celle de la vague initiale ; empiler une seconde forme complète sur les
+  // survivants produirait nécessairement des ancres concurrentes.
+  const positions = calculateFormationPositions(append ? FORMATIONS.GRID : formationType, size);
+  const rules = currentEnemyModeRules();
+  const sparseScale = size <= 10 ? (rules.sparseEnemyScale || 1) : 1;
+  const modeScale = (rules.enemyScale || 1) * sparseScale;
+  if (append && isFinite(appendTop)) {
+    let maxRadius = 0;
+    for (let i = 0; i < roster.length; i++) {
+      maxRadius = Math.max(maxRadius, enemySizeFor(roster[i]) * modeScale / 2);
+    }
+    // Si la rangée supérieure manque de place, toute la formation vivante
+    // descend juste assez pour ouvrir une voie visible au renfort.
+    const minCenter = 40 + maxRadius;
+    let desiredCenter = appendTop - maxRadius - 8;
+    if (desiredCenter < minCenter) {
+      const maxY = CANVAS_HEIGHT * (rules.formationMaxY || 0.45);
+      const shift = Math.max(0, Math.min(minCenter - desiredCenter, maxY - appendBottom));
+      if (shift > 0) {
+        for (let i = 0; i < enemies.length; i++) {
+          const live = enemies[i];
+          if (!live || live.isDeleted || live.isBonus || live.isHazard) continue;
+          live.formationY += shift;
+          live.y += shift;
+          live.targetY += shift;
+        }
+        appendTop += shift;
+        desiredCenter += shift;
+      }
+    }
+    // Une ancre de renfort n'est jamais autorisée au-dessus de la zone visible.
+    driftY = Math.max(minCenter, desiredCenter) - formationTopY();
+  }
+  separateFormationPositions(positions, roster, modeScale);
   const paths = calculateEntryPaths(choreographyType, positions);
 
   const fallback = { x: CANVAS_WIDTH / 2, y: formationTopY() };
@@ -595,6 +763,10 @@ function createFormation(count, formationType, choreographyType, stage, append) 
     const start = path.start || { x: target.x, y: -120 };
 
     const e = createEnemy(0, 0, roster[i], stage, ENEMY_PATTERNS.FORMATION);
+    if (modeScale !== 1) {
+      e.width = Math.round(e.width * modeScale);
+      e.height = Math.round(e.height * modeScale);
+    }
 
     // Ancre de formation, en coordonnées COIN (comme e.x / e.y).
     e.formationX = clamp(target.x + driftX, 12, CANVAS_WIDTH - 12) - e.width / 2;
@@ -610,7 +782,7 @@ function createFormation(count, formationType, choreographyType, stage, append) 
     e.formationIndex = indexBase + i;
     e.entryPath = path;
     e.entryProgress = 0;
-    e.entryRate = entryRateFor(path, start, target);
+    e.entryRate = entryRateFor(path, start, target) * (rules.entrySpeedMultiplier || 1);
     // Décalage d'entrée : échelonné pour la chorégraphie, mais PLAFONNÉ. Sans
     // ce plafond, une vague de 22 attendrait 1,2 s avant que le dernier parte.
     e.entryDelay = (size > 1)
@@ -629,7 +801,7 @@ function createFormation(count, formationType, choreographyType, stage, append) 
 function createEnemyWave(count) {
   try {
     const stage = (typeof stageSystem !== 'undefined' && stageSystem.currentStage) || 1;
-    const formations = [FORMATIONS.GRID, FORMATIONS.DOUBLE_ROW, FORMATIONS.DIAMOND, FORMATIONS.CIRCLE];
+    const formations = Object.values(FORMATIONS);
     const choreos = [
       ENTRY_CHOREOGRAPHIES.CURVE_LEFT, ENTRY_CHOREOGRAPHIES.CURVE_RIGHT,
       ENTRY_CHOREOGRAPHIES.ZIGZAG, ENTRY_CHOREOGRAPHIES.SPLIT, ENTRY_CHOREOGRAPHIES.SPIRAL
@@ -669,7 +841,7 @@ function updateFormationMarch(dt) {
 
   for (let i = 0; i < enemies.length; i++) {
     const e = enemies[i];
-    if (!e || e.isDeleted || !e.hasEntered) continue;
+    if (!e || e.isDeleted || e.isBonus || e.isHazard || !e.hasEntered) continue;
     if (e.diveState === 'dive' || e.diveState === 'return') continue;
     n++;
     if (e.formationX < minX) minX = e.formationX;
@@ -710,6 +882,15 @@ function updateFormationMarch(dt) {
     // Rattrapage si la formation déborde déjà (redimensionnement de fenêtre…)
     if (maxX + step > CANVAS_WIDTH - margin) step = (CANVAS_WIDTH - margin) - maxX;
     if (minX + step < margin) step = margin - minX;
+
+    // Le mode Assaut avance comme une armée d'invasion : toute la ligne
+    // descend continuellement au lieu d'envoyer les plongeurs de l'Arcade.
+    const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
+    const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+    const rules = mode && mode.progression ? mode.progression.rules : null;
+    if (rules && rules.descentPerSecond > 0) {
+      drop += rules.descentPerSecond * (1 + Math.max(0, stageSystem.currentStage - 1) * 0.018) * dt;
+    }
 
     // On ne descend jamais au-delà de la limite de sécurité.
     if (drop > 0 && lowest + drop > CANVAS_HEIGHT * TEMPO.FORMATION_MAX_DESCENT) drop = 0;
@@ -933,8 +1114,9 @@ function hasAllyBelow(e) {
 
 /** Ouvre la charge : c'est CE moment que le joueur doit voir venir. */
 function startEnemyCharge(e) {
-  e.charge = TEMPO.ENEMY_SHOT_TELEGRAPH_MS;
-  e.chargeMax = TEMPO.ENEMY_SHOT_TELEGRAPH_MS;
+  const telegraph = TEMPO.ENEMY_SHOT_TELEGRAPH_MS * (enemyStats(e.type).telegraphMultiplier || 1);
+  e.charge = telegraph;
+  e.chargeMax = telegraph;
   e.aimAngle = enemyAimAngle(e);
 }
 
@@ -1063,7 +1245,7 @@ function triggerEnemyVolley(stage) {
 
   for (let k = 0; k < n && fired < wanted; k++) {
     const e = enemies[(k + off) % n];
-    if (!e || e.isDeleted || !e.hasEntered) continue;
+    if (!e || e.isDeleted || e.isBonus || e.isHazard || !e.hasEntered) continue;
     if (e.charge > 0 || e.burstLeft > 0 || e.shotCooldown > 0) continue;
     if (e.diveState === 'telegraph' || e.diveState === 'return') continue;
     if (hasAllyBelow(e)) continue;
@@ -1168,7 +1350,9 @@ function updateEnemies(deltaTime) {
     // Plongeurs simultanés : montée en puissance par stage, plafonnée par TEMPO.
     // Au stage 1 il y a TOUJOURS un plongeur en approche, mais un seul : le
     // joueur apprend à lire l'attaque avant d'en affronter quatre.
-    const maxDivers = clamp(1 + Math.floor(stage / 2), 1, TEMPO.DIVE_MAX_CONCURRENT);
+    const maxDivers = TEMPO.DIVE_MAX_CONCURRENT <= 0
+      ? 0
+      : clamp(1 + Math.floor(stage / 2), 1, TEMPO.DIVE_MAX_CONCURRENT);
 
     let divers = 0;
     for (let i = 0; i < enemies.length; i++) {
@@ -1182,9 +1366,41 @@ function updateEnemies(deltaTime) {
 
       const prevX = e.x, prevY = e.y;
 
+      if (e.isBonus) {
+        e.x += e.vx * dt;
+        e.y = e.bonusBaseY + Math.sin(FRAME.time * 7 + e.phase) * 18;
+        e.faceAngle = e.vx > 0 ? -Math.PI / 2 : Math.PI / 2;
+        if (e.x > CANVAS_WIDTH + e.width + 40 || e.x < -e.width - 40) {
+          enemies.splice(i, 1);
+          i--;
+        }
+        continue;
+      }
+
+      if (e.isHazard) {
+        e.x += e.vx * dt;
+        e.y += e.vy * dt;
+        e.faceAngle += e.spin * dt;
+        if (e.y > CANVAS_HEIGHT + e.height + 50 ||
+            e.x > CANVAS_WIDTH + e.width + 50 || e.x < -e.width - 50) {
+          enemies.splice(i, 1);
+          i--;
+        }
+        continue;
+      }
+
       if (e.hitFlash > 0) { e.hitFlash -= dtMs; if (e.hitFlash < 0) e.hitFlash = 0; }
 
       updateEnemyMovement(e, dtMs);
+
+      // Filet absolu : une fois entré, aucun membre d'une formation ne peut
+      // remonter hors champ, même si une oscillation ou un renfort déplace son
+      // ancre pendant la même frame.
+      if (e.hasEntered && e.diveState === 'none' && e.y < 10) {
+        e.y = 10;
+        e.formationY = Math.max(e.formationY, 10);
+        e.targetY = Math.max(e.targetY, 10);
+      }
 
       if (e.hasEntered && e.diveState === 'none' && divers < maxDivers) {
         if (tryStartDive(e, dt, stage)) divers++;
@@ -1241,6 +1457,27 @@ function detectEnemyCollisions() {
 const _sbuf = [];
 const _unit = [];
 const _o = { alpha: 1, glowScale: 1, fill: false, fillAlpha: 0.28, dash: null, dashOffset: 0, passes: undefined };
+let _enemyContrastSprite = null;
+
+/** Masque doux réutilisé sous chaque menace. Il assombrit localement le décor
+ *  déjà peint dans le buffer sans ajouter de bloom ni de coût de flou par frame. */
+function enemyContrastSprite() {
+  if (_enemyContrastSprite) return _enemyContrastSprite;
+  if (typeof document === 'undefined') return null;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 96;
+  const g = cv.getContext('2d');
+  if (!g) return null;
+  const grad = g.createRadialGradient(48, 48, 5, 48, 48, 47);
+  grad.addColorStop(0.00, 'rgba(1, 2, 8, 0.86)');
+  grad.addColorStop(0.44, 'rgba(1, 2, 8, 0.72)');
+  grad.addColorStop(0.72, 'rgba(1, 2, 8, 0.34)');
+  grad.addColorStop(1.00, 'rgba(1, 2, 8, 0)');
+  g.fillStyle = grad;
+  g.fillRect(0, 0, 96, 96);
+  _enemyContrastSprite = cv;
+  return cv;
+}
 
 function opt(alpha, glowScale, fill, fillAlpha, passes) {
   _o.alpha = alpha == null ? 1 : alpha;
@@ -1430,12 +1667,68 @@ function drawShipElite(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase) {
   eDot(c, cx, cy, s, cos, sin, 0, 0, s * 0.14, col, opt(alpha, gs * 1.2));
 }
 
+function drawShipArmored(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase) {
+  // Une forteresse courte et large : la silhouette annonce immédiatement les PV.
+  _unit.length = 16;
+  _unit[0] = 0; _unit[1] = 0.58;
+  _unit[2] = 0.50; _unit[3] = 0.32;
+  _unit[4] = 0.62; _unit[5] = -0.14;
+  _unit[6] = 0.30; _unit[7] = -0.48;
+  _unit[8] = 0; _unit[9] = -0.36;
+  _unit[10] = -0.30; _unit[11] = -0.48;
+  _unit[12] = -0.62; _unit[13] = -0.14;
+  _unit[14] = -0.50; _unit[15] = 0.32;
+  eShape(c, _unit, cx, cy, s, cos, sin, col, w * 1.25, opt(alpha, gs, true, 0.24));
+  for (let side = -1; side <= 1; side += 2) {
+    eLine(c, cx, cy, s, cos, sin, side * 0.23, -0.25, side * 0.48, 0.28,
+      col, w * 1.05, opt(alpha * 0.8, gs));
+  }
+  const pulse = 0.72 + Math.sin(t * 3.2 + phase) * 0.16;
+  eRing(c, cx, cy, s, cos, sin, 0, 0.03, s * 0.22, w, col, opt(alpha * pulse, gs));
+  eDot(c, cx, cy, s, cos, sin, 0, 0.03, s * 0.10, col, opt(alpha, gs * 1.2));
+}
+
+function drawShipSniper(c, cx, cy, s, cos, sin, col, w, alpha, gs, t) {
+  // Aiguille asymétrique et viseur : peu de PV, mais un tir rapide et précis.
+  _unit.length = 12;
+  _unit[0] = 0; _unit[1] = 0.68;
+  _unit[2] = 0.22; _unit[3] = 0.06;
+  _unit[4] = 0.12; _unit[5] = -0.52;
+  _unit[6] = -0.08; _unit[7] = -0.34;
+  _unit[8] = -0.42; _unit[9] = 0.02;
+  _unit[10] = -0.16; _unit[11] = 0.22;
+  eShape(c, _unit, cx, cy, s, cos, sin, col, w, opt(alpha, gs, true, 0.15));
+  eLine(c, cx, cy, s, cos, sin, 0, -0.48, 0, 0.58, col, w * 0.65, opt(alpha, gs));
+  const sight = opt(alpha * 0.8, gs, false, 0, 3);
+  sight.dash = [3, 5]; sight.dashOffset = -t * 24;
+  eRing(c, cx, cy, s, cos, sin, -0.05, 0.02, s * 0.24, w * 0.65, col, sight);
+  eDot(c, cx, cy, s, cos, sin, -0.05, 0.02, s * 0.07, col, opt(alpha, gs * 1.35));
+}
+
+function drawAsteroid(c, cx, cy, s, cos, sin, col, w, alpha, gs) {
+  _unit.length = 18;
+  const radii = [0.56, 0.44, 0.61, 0.48, 0.58, 0.43, 0.62, 0.47, 0.54];
+  for (let i = 0; i < 9; i++) {
+    const a = i / 9 * TWO_PI - Math.PI / 2;
+    _unit[i * 2] = Math.cos(a) * radii[i];
+    _unit[i * 2 + 1] = Math.sin(a) * radii[i];
+  }
+  eShape(c, _unit, cx, cy, s, cos, sin, col, w, opt(alpha, gs, true, 0.13));
+  eLine(c, cx, cy, s, cos, sin, -0.26, -0.14, 0.12, 0.24, col, w * 0.60, opt(alpha * 0.55, gs));
+  eLine(c, cx, cy, s, cos, sin, 0.12, 0.24, 0.34, 0.06, col, w * 0.55, opt(alpha * 0.48, gs));
+  eRing(c, cx, cy, s, cos, sin, 0.20, -0.18, s * 0.12, w * 0.55, col, opt(alpha * 0.50, gs));
+}
+
 /** Aiguillage des silhouettes. */
 function drawEnemySilhouette(c, type, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase) {
   switch (type) {
+    case 'bonus':   drawShipElite(c, cx, cy, s, cos, sin, col, w * 1.25, alpha, gs * 1.35, t * 1.8, phase); break;
     case 'shooter': drawShipShooter(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase); break;
     case 'fast':    drawShipFast(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase);    break;
     case 'elite':   drawShipElite(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase);   break;
+    case 'armored': drawShipArmored(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase); break;
+    case 'sniper':  drawShipSniper(c, cx, cy, s, cos, sin, col, w, alpha, gs, t);          break;
+    case 'asteroid':drawAsteroid(c, cx, cy, s, cos, sin, col, w, alpha, gs);                 break;
     case 'normal':
     default:        drawShipNormal(c, cx, cy, s, cos, sin, col, w, alpha, gs, t, phase);  break;
   }
@@ -1471,6 +1764,14 @@ function drawDiveTelegraph(c, e, cx, cy, s, k) {
 function drawShotCharge(c, e, cx, cy, s, k) {
   const key = PALETTE.bullet('enemy', e.type);
   const a = e.aimAngle || Math.PI / 2;
+  if (e.type === 'sniper') {
+    const reach = Math.max(CANVAS_WIDTH, CANVAS_HEIGHT) * 1.15;
+    NEON.line(c, cx, cy, cx + Math.cos(a) * reach, cy + Math.sin(a) * reach,
+      PALETTE.bullet('enemy', 'sniper'), 1.1, {
+        alpha: 0.08 + k * 0.30, dash: [3, 12], dashOffset: -FRAME.time * 90,
+        passes: 2, cap: 'butt'
+      });
+  }
   const ca = Math.cos(a), sa = Math.sin(a);
   const mx = cx + ca * s * 0.74;
   const my = cy + sa * s * 0.74;
@@ -1544,6 +1845,18 @@ function drawEnemyShip(c, tr, e, t) {
   const key = (tele > 0.02) ? 'enemyDiving' : st.paletteKey;
   const w = clamp(s * 0.11, 1.3, 3.2);
   const gs = 1 + tele * 0.9 + chargeK * 0.25;
+
+  // Séparation figure/fond : indispensable lorsqu'un ennemi passe devant un
+  // soleil, un disque d'accrétion ou une planète fortement éclairée.
+  const contrast = enemyContrastSprite();
+  if (contrast) {
+    const pad = s * (e.isHazard ? 1.55 : 1.32);
+    c.save();
+    c.globalCompositeOperation = 'source-over';
+    c.globalAlpha = e.isHazard ? 0.66 : 0.94;
+    c.drawImage(contrast, cx - pad, cy - pad, pad * 2, pad * 2);
+    c.restore();
+  }
 
   // Traînée persistante : RÉSERVÉE à l'entrée et à la plongée. En formation, la
   // marche latérale dépasse 300 px/s aux stages élevés : y laisser une traînée
@@ -1655,3 +1968,55 @@ window.ENEMY_TYPES = ENEMY_TYPES;
 window.createFormation = createFormation;
 window.updateEnemies = updateEnemies;
 window.drawEnemies = drawEnemies;
+
+/** Convoyeur doré : traverse rapidement le haut de l'écran et ne tire jamais. */
+window.spawnBonusEnemy = function spawnBonusEnemy() {
+  for (let i = 0; i < enemies.length; i++) {
+    if (enemies[i] && !enemies[i].isDeleted && enemies[i].isBonus) return false;
+  }
+  const fromLeft = Math.random() < 0.5;
+  const stage = typeof stageSystem !== 'undefined' ? stageSystem.currentStage : 1;
+  const size = enemySizeFor('bonus');
+  const y = clamp(CANVAS_HEIGHT * (0.18 + Math.random() * 0.16), 90, CANVAS_HEIGHT * 0.38);
+  const e = createEnemy(fromLeft ? -size - 30 : CANVAS_WIDTH + 30, y, 'bonus', stage, ENEMY_PATTERNS.SWEEP);
+  e.isBonus = true;
+  e.hasEntered = true;
+  // Fragile lors de sa première apparition, puis renforcé tous les dix secteurs.
+  e.hp = e.maxHp = 1 + Math.floor((stage - 1) / 10);
+  const speedProgress = clamp((stage - 1) / 24, 0, 1);
+  const earlySpeed = clamp(CANVAS_WIDTH * 0.32, 300, 430);
+  const lateSpeed = clamp(CANVAS_WIDTH * 0.68, 600, 820);
+  e.vx = (fromLeft ? 1 : -1) * (earlySpeed + (lateSpeed - earlySpeed) * speedProgress);
+  e.bonusBaseY = y;
+  e.phase = Math.random() * TWO_PI;
+  enemies.push(e);
+  if (typeof hudAlert === 'function') hudAlert('CONVOYEUR BONUS', 'DÉTRUISEZ-LE AVANT SA FUITE', '#ffee55', 1050);
+  if (typeof gameEvent === 'function') gameEvent('diveAlert', { bonus: true });
+  return true;
+};
+
+/** Obstacle environnemental rare : annoncé, lent et indépendant du stage. */
+window.spawnAsteroidHazard = function spawnAsteroidHazard(count) {
+  for (let i = 0; i < enemies.length; i++) {
+    if (enemies[i] && !enemies[i].isDeleted && enemies[i].isHazard) return false;
+  }
+  const stage = typeof stageSystem !== 'undefined' ? stageSystem.currentStage : 1;
+  const amount = clamp(Math.floor(count) || 1, 1, 2);
+  for (let i = 0; i < amount; i++) {
+    const lane = amount === 1 ? 0.22 + Math.random() * 0.56 : (i === 0 ? 0.28 : 0.72);
+    const size = clamp(enemySizeFor('asteroid') * (0.82 + Math.random() * 0.38), 46, 86);
+    const e = createEnemy(lane * CANVAS_WIDTH - size / 2, -size - 80 - i * 130,
+      'asteroid', stage, ENEMY_PATTERNS.SWEEP);
+    e.width = e.height = size;
+    e.hp = e.maxHp = 6 + Math.floor((stage - 1) / 8);
+    e.isHazard = true;
+    e.hasEntered = true;
+    e.vx = (Math.random() - 0.5) * 55;
+    e.vy = clamp(185 + stage * 5 + Math.random() * 45, 190, 340);
+    e.spin = (Math.random() < 0.5 ? -1 : 1) * (0.35 + Math.random() * 0.55);
+    e.faceAngle = Math.random() * TWO_PI;
+    enemies.push(e);
+  }
+  if (typeof hudAlert === 'function') hudAlert('DANGER ORBITAL', 'ASTÉROÏDES EN APPROCHE', '#ffb46b', 1500);
+  return true;
+};

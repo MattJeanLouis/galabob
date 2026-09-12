@@ -1,0 +1,16 @@
+{
+  "name": "galabob",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Shoot'em up vectoriel neon en Canvas 2D.",
+  "scripts": {
+    "check:syntax": "node scripts/check-syntax.mjs",
+    "test": "node --test",
+    "check": "npm run check:syntax && npm test",
+    "serve": "python3 -m http.server 8000"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

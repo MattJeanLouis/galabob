@@ -1,13 +1,15 @@
 /* =============================================================================
  *  galabob — BOSS  (module global autonome)
  * -----------------------------------------------------------------------------
- *  QUATRE BOSS, chacun en néon vectoriel, trois phases, attaques télégraphiées,
+ *  SIX BOSS, chacun en néon vectoriel, trois phases, attaques télégraphiées,
  *  points faibles lumineux et mort en explosion en chaîne.
  *
  *      index 0 — LA RUCHE    (stage 5)   essaim → éventail → charge
  *      index 1 — LE PRISME   (stage 10)  rayons réfléchis → phare → cage
  *      index 2 — LE SERPENT  (stage 15)  ondulation → morsure → traversée
  *      index 3 — LE CŒUR     (stage 20)  recombine les trois, le plus long
+ *      index 4 — LA CITADELLE(stage 25)  tourelles → verrou → siège
+ *      index 5 — L’ÉCLIPSE   (stage 30)  binaire → couronnes → rayon orbital
  *
  *  LE MODULE EST AUTONOME. Tant que personne ne l'appelle, il ne fait
  *  strictement rien : aucun effet de bord au chargement, aucun crochet posé sur
@@ -64,7 +66,7 @@
  *  toujours AMBRE (PALETTE 'enemy.fast') et pulsent ; le DANGER (rayons,
  *  corridors de charge, salves imminentes) est toujours ROUGE en pointillés
  *  qui défilent. Le joueur apprend cette grammaire une fois et la relit sur
- *  les quatre boss.
+ *  tous les boss.
  * ========================================================================== */
 
 const BOSS = (function () {
@@ -74,20 +76,28 @@ const BOSS = (function () {
    *  1. RÉGLAGES
    * ======================================================================== */
 
-  const RUCHE = 0, PRISME = 1, SERPENT = 2, COEUR = 3;
+  const RUCHE = 0, PRISME = 1, SERPENT = 2, COEUR = 3, CITADELLE = 4, ECLIPSE = 5;
 
   /** Stage de convocation de chaque boss. */
-  const STAGES = [5, 10, 15, 20];
+  const STAGES = [5, 10, 15, 20, 25, 30];
+
+  // Les boucles ne se contentent plus de gonfler les PV : elles portent une
+  // identité annoncée, un rythme et une densité de pattern distincts.
+  const VARIANTES = [
+    { nom: '', hp: 1.00, vitesse: 1.00, cadence: 1.00, balles: 0 },
+    { nom: 'SURCHARGÉ', hp: 1.10, vitesse: 1.07, cadence: 1.10, balles: 1 },
+    { nom: 'ABYSSAL', hp: 1.18, vitesse: 1.12, cadence: 1.16, balles: 2 }
+  ];
 
   const REGLAGES = {
     /* --- durée de combat visée -------------------------------------------
      *  Les PV sont DÉDUITS d'une durée cible et d'un DPS de référence, au lieu
      *  d'être un nombre magique : si l'arme du joueur change, il suffit de
-     *  corriger dpsRef ici pour que les quatre boss restent dans la fenêtre
+     *  corriger dpsRef ici pour que les boss restent dans la fenêtre
      *  des 40-70 s demandée.
      *  dpsRef = cadence 110 ms, ~70 % de touches, dégât 1 -> ~8,5 PV/s. */
     dpsRef: 8.5,
-    dureeVisee: [40, 44, 32, 50],   // secondes, boss par boss
+    dureeVisee: [40, 44, 32, 50, 42, 46],   // secondes, boss par boss
 
     /* --- montée en difficulté avec les boucles ---------------------------- */
     menaceMax: 6,
@@ -122,6 +132,9 @@ const BOSS = (function () {
     actif: false,
     vaincu: false,
     index: -1,
+    variant: 0,
+    variantCycle: 0,
+    variantProfile: null,
     menace: 1,
     def: null,
 
@@ -2501,8 +2514,295 @@ const BOSS = (function () {
     }
   }
 
-  /* --- table des quatre boss ---------------------------------------------- */
-  const DEFS = [DEF_RUCHE, DEF_PRISME, DEF_SERPENT, DEF_COEUR];
+  /* ===========================================================================
+   *  16. BOSS 4 — LA CITADELLE
+   * -----------------------------------------------------------------------
+   *  Une forteresse large dont les quatre tourelles tournent autour du noyau.
+   *  Chaque phase accélère la rotation et transforme la géométrie du barrage.
+   * ======================================================================== */
+
+  const DEF_CITADELLE = {
+    nom: 'LA CITADELLE',
+    sous: 'FORTERESSE ORBITALE',
+    coul: 'enemy.shooter',
+
+    init: function () {
+      const e = ech(), m = S.memo;
+      m.r = 72 * e;
+      m.orbite = 132 * e;
+      m.rot = 0;
+      m.ouverture = 0;
+      ajouterPart('cit-coeur', 'coque', 0, 0, m.r, Infinity);
+      ajouterPart('cit-aile-g', 'coque', -m.r * 1.15, 0, m.r * 0.55, Infinity);
+      ajouterPart('cit-aile-d', 'coque', m.r * 1.15, 0, m.r * 0.55, Infinity);
+      construireTourellesCitadelle();
+      S.x = larg() / 2;
+      S.y = -m.orbite;
+    },
+
+    reconstruire: construireTourellesCitadelle,
+
+    update: function (dt) {
+      const m = S.memo, W = larg(), H = haut();
+      const amp = Math.max(20, W * 0.34 - m.orbite);
+      S.x = W / 2 + Math.sin(S.t * (0.28 + S.phase * 0.035)) * amp;
+      S.y = H * 0.235 + Math.sin(S.t * 0.72) * 10 * ech();
+      S.angle = 0;
+      m.rot += dt * (0.28 + S.phase * 0.13) * (S.variant ? 1.15 : 1);
+      m.ouverture = damp2(m.ouverture, enTele() ? 1 : 0.15, 0.025, dt);
+
+      const tourelles = partsDe('faible');
+      for (let i = 0; i < tourelles.length; i++) {
+        const p = tourelles[i];
+        const a = m.rot + p.rang * TAU / 4;
+        p.ox = Math.cos(a) * m.orbite;
+        p.oy = Math.sin(a) * m.orbite * 0.54;
+        p.angle = a;
+      }
+
+      const etat = avancerAttaque(dt, onTirCitadelle);
+      if (etat === 'fin' || etat === 'libre') programmerCitadelle();
+    },
+
+    dessiner: dessinerCitadelle
+  };
+
+  function construireTourellesCitadelle() {
+    const m = S.memo;
+    retirerParts('faible');
+    const pv = S.hpMax * 0.048;
+    for (let i = 0; i < 4; i++) {
+      const a = m.rot + i * TAU / 4;
+      ajouterPart('cit-t' + i, 'faible', Math.cos(a) * m.orbite,
+                  Math.sin(a) * m.orbite * 0.54, m.r * 0.29, pv, { rang: i });
+    }
+  }
+
+  function programmerCitadelle() {
+    let nom;
+    if (S.phase === 1) nom = choisir([['bastion', 1], ['verrou', 0.65]]);
+    else if (S.phase === 2) nom = choisir([['croix', 1], ['verrou', 0.8], ['bastion', 0.55]]);
+    else nom = choisir([['siege', 1], ['croix', 0.85], ['verrou', 0.55]]);
+
+    if (nom === 'bastion') lancerAttaque(nom, 0.80, 0.65, 1.25, 4, 0.16);
+    else if (nom === 'verrou') lancerAttaque(nom, 0.68, 0.55, 0.95, 5 + S.phase, 0.12);
+    else if (nom === 'croix') lancerAttaque(nom, 0.95, 0.75, 1.15, 3, 0.24);
+    else lancerAttaque(nom, 1.15, 1.00, 1.25, 3, 0.28);
+  }
+
+  function onTirCitadelle(i, a) {
+    const m = S.memo;
+    const ts = partsDe('faible');
+    const src = ts.length ? ts[i % ts.length] : { x: S.x, y: S.y };
+    if (a.nom === 'bastion') {
+      eventail(src.x, src.y, Math.PI / 2, 5 + S.phase + S.bonusBalles,
+               0.72, 320 + S.phase * 18, 'normal');
+    } else if (a.nom === 'verrou') {
+      tirer(src.x, src.y, viser(src.x, src.y), 430, 'shooter', { width: 6, height: 18 });
+    } else if (a.nom === 'croix') {
+      for (let j = 0; j < ts.length; j++) {
+        const ang = viser(ts[j].x, ts[j].y) + (i - 1) * 0.12;
+        eventail(ts[j].x, ts[j].y, ang, 3 + S.bonusBalles, 0.30, 350, 'fast');
+      }
+    } else if (a.nom === 'siege') {
+      const n = 14 + S.bonusBalles * 2;
+      anneau(S.x, S.y, n, 285 + i * 24, 'normal', m.rot + i * TAU / (n * 2));
+      if (i === 1 && S.variant > 0) {
+        for (let j = 0; j < ts.length; j++) lacherDrone(ts[j].x, ts[j].y, Math.PI / 2, S.coul);
+      }
+    }
+    evt('enemyShot', { type: a.nom === 'verrou' ? 'shooter' : 'elite' });
+    secousse(a.nom === 'siege' ? 0.16 : 0.07);
+  }
+
+  function dessinerCitadelle(c) {
+    const m = S.memo, t = tps();
+    const col = S.flash > 0.02 ? 'shock' : S.coul;
+    const ts = partsDe('faible');
+
+    // Bras et grande silhouette d'abord : la forteresse se lit comme un seul
+    // objet, même lorsque ses tourelles sont très éloignées du centre.
+    for (let i = 0; i < ts.length; i++) {
+      const p = ts[i];
+      NEON.line(c, S.x, S.y, p.x, p.y, col, 3.2, { alpha: 0.28, passes: 3 });
+      NEON.line(c, S.x, S.y, p.x, p.y, 'shock', 0.8, { alpha: 0.28, passes: 1 });
+    }
+    NEON.shape(c, poly(S.x, S.y, m.r * 1.42, 8, -m.rot * 0.32, 0.72), col, 3.2,
+               { alpha: 1, fill: true, fillAlpha: 0.16, glowScale: 1.35, passes: 4 });
+    NEON.shape(c, etoile(S.x, S.y, m.r, m.r * 0.58, 8, m.rot * 0.55), col, 1.8,
+               { alpha: 0.72, fill: true, fillAlpha: 0.10, passes: 3 });
+    NEON.ring(c, S.x, S.y, m.r * (0.36 + m.ouverture * 0.12), 3.0, FAIBLE,
+              { alpha: 0.72 + m.ouverture * 0.25, glowScale: 1.5, passes: 4 });
+
+    for (let i = 0; i < ts.length; i++) {
+      const p = ts[i], pc = p.flash > 0.02 ? 'shock' : FAIBLE;
+      NEON.shape(c, poly(p.x, p.y, p.r * 1.35, 6, p.angle + t * 0.25), col, 2.0,
+                 { alpha: 0.9, fill: true, fillAlpha: 0.18, passes: 3 });
+      NEON.dot(c, p.x, p.y, p.r * 0.45, pc, { alpha: 0.95, glowScale: 1.55 });
+      NEON.line(c, p.x, p.y, p.x + Math.cos(viser(p.x, p.y)) * p.r * 1.8,
+                p.y + Math.sin(viser(p.x, p.y)) * p.r * 1.8, pc, 2.2,
+                { alpha: 0.7, passes: 2 });
+    }
+
+    const a = S.att;
+    if (!a || a.etat !== 'tele') return;
+    if (a.nom === 'verrou' || a.nom === 'croix') {
+      for (let i = 0; i < ts.length; i++) {
+        const ang = viser(ts[i].x, ts[i].y);
+        teleLigne(c, ts[i].x, ts[i].y, ts[i].x + Math.cos(ang) * haut(),
+                  ts[i].y + Math.sin(ang) * haut(), a.k, DANGER, 1.5);
+      }
+    } else if (a.nom === 'bastion') {
+      for (let i = 0; i < ts.length; i++) teleEventail(c, ts[i].x, ts[i].y, Math.PI / 2,
+        5 + S.phase, 0.72, haut() * 0.55, a.k, DANGER);
+    } else {
+      teleEventail(c, S.x, S.y, m.rot, 14, TAU * 13 / 14, m.orbite * 1.45, a.k, DANGER);
+      teleAlerte(c, S.x, S.y + m.orbite, a.k, DANGER);
+    }
+  }
+
+  /* ===========================================================================
+   *  17. BOSS 5 — L’ÉCLIPSE
+   * -----------------------------------------------------------------------
+   *  Deux astres de guerre tournent autour d'un puits noir. Le danger vient
+   *  tantôt des deux soleils, tantôt du rayon qui les relie au joueur.
+   * ======================================================================== */
+
+  const DEF_ECLIPSE = {
+    nom: 'L’ÉCLIPSE',
+    sous: 'BINAIRE DE GUERRE',
+    coul: 'enemy.elite',
+
+    init: function () {
+      const e = ech(), m = S.memo;
+      m.r = 40 * e;
+      m.orbite = 105 * e;
+      m.rot = -Math.PI / 2;
+      m.pulse = 0;
+      ajouterPart('ecl-puits', 'coque', 0, 0, m.r * 0.92, Infinity,
+                  { vulnerable: false, armure: 0.35 });
+      construireAstresEclipse();
+      S.x = larg() / 2;
+      S.y = -m.orbite;
+    },
+
+    reconstruire: construireAstresEclipse,
+
+    update: function (dt) {
+      const m = S.memo, W = larg(), H = haut();
+      S.x = W / 2 + Math.sin(S.t * 0.31) * Math.max(18, W * 0.20);
+      S.y = H * 0.235 + Math.sin(S.t * 0.57) * 13 * ech();
+      S.angle = 0;
+      m.rot += dt * (0.48 + S.phase * 0.18) * (S.variant ? 1.12 : 1);
+      m.pulse = damp2(m.pulse, enTele() ? 1 : 0, 0.035, dt);
+      const astres = partsDe('faible');
+      for (let i = 0; i < astres.length; i++) {
+        const p = astres[i], ang = m.rot + p.rang * Math.PI;
+        p.ox = Math.cos(ang) * m.orbite;
+        p.oy = Math.sin(ang) * m.orbite * 0.58;
+      }
+      const etat = avancerAttaque(dt, onTirEclipse);
+      if (etat === 'fin' || etat === 'libre') programmerEclipse();
+    },
+
+    dessiner: dessinerEclipse
+  };
+
+  function construireAstresEclipse() {
+    const m = S.memo;
+    retirerParts('faible');
+    const pv = S.hpMax * 0.075;
+    for (let i = 0; i < 2; i++) {
+      const a = m.rot + i * Math.PI;
+      ajouterPart('ecl-astre-' + i, 'faible', Math.cos(a) * m.orbite,
+                  Math.sin(a) * m.orbite * 0.58, m.r, pv, { rang: i });
+    }
+  }
+
+  function programmerEclipse() {
+    let nom;
+    if (S.phase === 1) nom = choisir([['convergence', 1], ['corona', 0.65]]);
+    else if (S.phase === 2) nom = choisir([['corona', 1], ['cisaille', 0.8], ['convergence', 0.5]]);
+    else nom = choisir([['occultation', 1], ['cisaille', 0.8], ['corona', 0.65]]);
+    if (nom === 'convergence') lancerAttaque(nom, 0.72, 0.65, 1.05, 7, 0.105);
+    else if (nom === 'corona') lancerAttaque(nom, 0.92, 0.85, 1.25, 3, 0.27);
+    else if (nom === 'cisaille') lancerAttaque(nom, 0.82, 0.75, 1.05, 5, 0.14);
+    else lancerAttaque(nom, 1.20, 1.15, 1.30, 2 + (S.variant > 0 ? 1 : 0), 0.40);
+  }
+
+  function onTirEclipse(i, a) {
+    const m = S.memo, astres = partsDe('faible');
+    if (!astres.length) astres.push({ x: S.x, y: S.y });
+    const src = astres[i % astres.length];
+    if (a.nom === 'convergence') {
+      tirer(src.x, src.y, viser(src.x, src.y), 420, 'shooter', { width: 6, height: 18 });
+    } else if (a.nom === 'corona') {
+      for (let j = 0; j < astres.length; j++) {
+        const n = 10 + S.bonusBalles * 2;
+        anneau(astres[j].x, astres[j].y, n, 285 + i * 20, 'normal', m.rot + i * TAU / (n * 2));
+      }
+    } else if (a.nom === 'cisaille') {
+      for (let j = 0; j < astres.length; j++) {
+        eventail(astres[j].x, astres[j].y, viser(astres[j].x, astres[j].y),
+                 4 + S.bonusBalles, 0.46, 360, 'fast');
+      }
+    } else if (a.nom === 'occultation') {
+      const p = joueur(), L = larg() + haut();
+      const dx = p.x - src.x, dy = p.y - src.y, d = Math.hypot(dx, dy) || 1;
+      creerRayon([{ x: src.x, y: src.y },
+                   { x: src.x + dx / d * L, y: src.y + dy / d * L }],
+                  0.06, 0.58, DANGER, 7 * ech());
+    }
+    evt('enemyShot', { type: a.nom === 'convergence' ? 'shooter' : 'elite' });
+    secousse(a.nom === 'occultation' ? 0.20 : 0.09);
+  }
+
+  function dessinerEclipse(c) {
+    const m = S.memo, t = tps();
+    const col = S.flash > 0.02 ? 'shock' : S.coul;
+    const astres = partsDe('faible');
+
+    NEON.ring(c, S.x, S.y, m.orbite, 1.4, col,
+              { alpha: 0.20, dash: [9, 15], dashOffset: -t * 55, passes: 2 });
+    if (astres.length === 2) {
+      NEON.line(c, astres[0].x, astres[0].y, astres[1].x, astres[1].y, col, 2.4,
+                { alpha: 0.22 + m.pulse * 0.20, dash: [5, 9], dashOffset: t * 90, passes: 3 });
+    }
+    // Le puits central reste sombre, ceinturé de deux anneaux lumineux.
+    NEON.shape(c, poly(S.x, S.y, m.r * 1.05, 12, -m.rot * 0.3), col, 2.5,
+               { alpha: 0.75, fill: true, fillAlpha: 0.05, passes: 3 });
+    NEON.ring(c, S.x, S.y, m.r * (1.35 + Math.sin(t * 2.2) * 0.08), 1.5, 'shock',
+              { alpha: 0.28, passes: 2 });
+
+    for (let i = 0; i < astres.length; i++) {
+      const p = astres[i], pc = p.flash > 0.02 ? 'shock' : FAIBLE;
+      const rays = 10 + S.phase * 2;
+      NEON.shape(c, etoile(p.x, p.y, p.r * 1.35, p.r * 0.72, rays, t * (i ? -0.45 : 0.45)),
+                 col, 2.2, { alpha: 0.88, fill: true, fillAlpha: 0.13, glowScale: 1.3, passes: 4 });
+      NEON.dot(c, p.x, p.y, p.r * (0.40 + m.pulse * 0.12), pc,
+               { alpha: 0.96, glowScale: 1.7 + m.pulse });
+      NEON.ring(c, p.x, p.y, p.r * (1.55 + Math.sin(t * 4 + i) * 0.12), 1.3, pc,
+                { alpha: 0.48, passes: 2 });
+    }
+
+    const a = S.att;
+    if (!a || a.etat !== 'tele') return;
+    if (a.nom === 'convergence' || a.nom === 'cisaille' || a.nom === 'occultation') {
+      for (let i = 0; i < astres.length; i++) {
+        const ang = viser(astres[i].x, astres[i].y);
+        teleLigne(c, astres[i].x, astres[i].y,
+                  astres[i].x + Math.cos(ang) * haut(), astres[i].y + Math.sin(ang) * haut(),
+                  a.k, DANGER, a.nom === 'occultation' ? 2.5 : 1.4);
+        if (a.nom === 'occultation') teleAlerte(c, joueur().x, joueur().y - 48 * ech(), a.k, DANGER);
+      }
+    } else {
+      for (let i = 0; i < astres.length; i++) teleEventail(c, astres[i].x, astres[i].y,
+        m.rot, 10, TAU * 9 / 10, m.orbite * 1.45, a.k, DANGER);
+    }
+  }
+
+  /* --- catalogue des boss ------------------------------------------------- */
+  const DEFS = [DEF_RUCHE, DEF_PRISME, DEF_SERPENT, DEF_COEUR, DEF_CITADELLE, DEF_ECLIPSE];
 
   /* ===========================================================================
    *  16. BANNIÈRE — l'annonce plein écran
@@ -2888,6 +3188,9 @@ const BOSS = (function () {
     S.actif = false;
     S.vaincu = false;
     S.index = -1;
+    S.variant = 0;
+    S.variantCycle = 0;
+    S.variantProfile = VARIANTES[0];
     S.def = null;
     S.etat = 'inactif';
     S.t = 0; S.tEtat = 0;
@@ -2911,28 +3214,34 @@ const BOSS = (function () {
   }
 
   /** Convoque un boss.
-   *  @param {number} index   0 = Ruche, 1 = Prisme, 2 = Serpent, 3 = Cœur
+   *  @param {number} index   index dans le catalogue DEFS
    *  @param {number} [menace] 1 = première boucle ; monte à chaque bouclage
    *  @returns {boolean} */
   function spawn(index, menace) {
     reset();
     const i = cl(index | 0, 0, DEFS.length - 1);
     const def = DEFS[i];
+    const absoluteIndex = menace && typeof menace === 'object' && Number.isFinite(menace.bossIndex)
+      ? menace.bossIndex
+      : i;
 
     S.index = i;
+    S.variantCycle = Math.max(0, Math.floor(absoluteIndex / DEFS.length));
+    S.variant = S.variantCycle % VARIANTES.length;
+    S.variantProfile = VARIANTES[S.variant];
     S.def = def;
     S.menace = cl(Number(menace) || 1, 1, REGLAGES.menaceMax);
-    S.multVitesse = 1 + (S.menace - 1) * REGLAGES.menaceVitesse;
-    S.multCadence = 1 + (S.menace - 1) * REGLAGES.menaceCadence;
-    S.bonusBalles = Math.floor((S.menace - 1) * REGLAGES.menaceBalles);
+    S.multVitesse = (1 + (S.menace - 1) * REGLAGES.menaceVitesse) * S.variantProfile.vitesse;
+    S.multCadence = (1 + (S.menace - 1) * REGLAGES.menaceCadence) * S.variantProfile.cadence;
+    S.bonusBalles = Math.floor((S.menace - 1) * REGLAGES.menaceBalles) + S.variantProfile.balles;
 
-    S.nom = def.nom;
-    S.sous = def.sous;
+    S.nom = def.nom + (S.variantProfile.nom ? ' · ' + S.variantProfile.nom : '');
+    S.sous = def.sous + (S.variantCycle >= VARIANTES.length ? ' · NIVEAU ' + (S.variantCycle + 1) : '');
     S.coul = def.coul || coulCoeur();
 
     // PV déduits de la durée visée : voir REGLAGES.dureeVisee.
     S.hpMax = Math.round(REGLAGES.dpsRef * REGLAGES.dureeVisee[i] *
-                         (1 + (S.menace - 1) * REGLAGES.menacePv));
+                         (1 + (S.menace - 1) * REGLAGES.menacePv) * S.variantProfile.hp);
     S.hp = S.hpMax;
     S.hpFantome = S.hpMax;
 
@@ -2948,7 +3257,7 @@ const BOSS = (function () {
 
     S.yDepart = S.y;
 
-    annoncer(S.nom, S.menace > 1 ? ('MENACE ' + Math.round(S.menace)) : S.sous, S.coul, 2.4);
+    annoncer(S.nom, S.sous + (S.menace > 1 ? ' · MENACE ' + Math.round(S.menace) : ''), S.coul, 2.4);
     juice('stageStart');
     voile(css(S.coul), 420, 0.30);
     evt('divealert', {});
@@ -3187,16 +3496,15 @@ const BOSS = (function () {
   }
 
   /* ===========================================================================
-   *  23. AIDES DE PROGRESSION (facultatives, mais elles évitent que quatre
+   *  23. AIDES DE PROGRESSION (facultatives, mais elles évitent que plusieurs
    *      fichiers différents réinventent la même table)
    * ======================================================================== */
 
-  /** Index du boss à convoquer pour ce stage, ou -1. Boucle tous les 20 stages :
-   *  stage 25 renvoie donc de nouveau La Ruche. */
+  /** Index du boss à convoquer pour ce stage, ou -1. */
   function indexForStage(stage) {
     const s = stage | 0;
     if (s <= 0 || s % 5 !== 0) return -1;
-    return ((s / 5 - 1) % 4 + 4) % 4;
+    return ((s / 5 - 1) % DEFS.length + DEFS.length) % DEFS.length;
   }
 
   function isBossStage(stage) { return indexForStage(stage) >= 0; }
@@ -3227,6 +3535,7 @@ const BOSS = (function () {
     isVulnerable: function () { return S.actif && S.etat === 'combat' && S.invuln <= 0; },
     getPhase: function () { return S.phase; },
     getIndex: function () { return S.index; },
+    getVariant: function () { return S.variant; },
     getName: function () { return S.nom; },
     getSubtitle: function () { return S.sous; },
     getColor: function () { return S.coul; },
@@ -3247,7 +3556,8 @@ const BOSS = (function () {
     indexForStage: indexForStage,
     isBossStage: isBossStage,
     menaceForStage: menaceForStage,
-    stageForIndex: function (i) { return STAGES[cl(i | 0, 0, 3)]; },
+    stageForIndex: function (i) { return STAGES[cl(i | 0, 0, DEFS.length - 1)]; },
+    count: function () { return DEFS.length; },
 
     /* --- réglages, exposés pour l'équilibrage à chaud --- */
     config: REGLAGES,

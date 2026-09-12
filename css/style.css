@@ -93,6 +93,11 @@ canvas#gameCanvas {
      calibré au devicePixelRatio par js/utils.js. */
 }
 
+canvas#gameCanvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -4px;
+}
+
 /* =============================================================================
    PANNEAU AUDIO
    Affiché/masqué par toggleAudioControls() qui écrit style.display = 'block'.
