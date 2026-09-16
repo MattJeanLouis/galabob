@@ -839,7 +839,11 @@ const UIKIT = (function () {
      *  coder en dur des deux côtés. */
     hitRects: {
       soundButton: function () {
-        return { x: CANVAS_WIDTH / 2 - 100, y: CANVAS_HEIGHT / 2 + 120, width: 200, height: 40 };
+        const s = scale();
+        // Même marge que le menu (drawMenu → pad) : le bouton reste aligné sur
+        // la colonne de gauche quelle que soit la taille de fenêtre.
+        const pad = Math.max(28, Math.min(72, CANVAS_WIDTH * 0.052));
+        return { x: pad, y: CANVAS_HEIGHT - Math.max(56, 62 * s), width: Math.max(150, 178 * s), height: Math.max(28, 34 * s) };
       },
       volumeButton: function () {
         return { x: CANVAS_WIDTH / 2 - 100, y: CANVAS_HEIGHT / 2 - 40, width: 200, height: 40 };
@@ -905,242 +909,211 @@ function drawScreenBackdrop(c, opts) {
 /* =============================================================================
  *  MENU PRINCIPAL
  * ========================================================================== */
+/** Pont de lancement asymétrique : une décision à gauche, le vaisseau à droite. */
 function drawMenu() {
   const c = ctx;
+  const W = CANVAS_WIDTH, H = CANVAS_HEIGHT;
   const S = UIKIT.scale();
-  const cx = CANVAS_WIDTH / 2;
-  const dt = FRAME.rawDt;
+  const pad = clamp(W * 0.052, 28, 72);
+  const runtime = window.GALABOB;
+  const mode = runtime?.modes?.current?.();
+  const ship = runtime?.ships?.get?.(runtime?.profile?.data?.selectedShip) || null;
+  const compact = W < 900 || H < 620;
 
   UIKIT.beginScreen('menu');
-  drawScreenBackdrop(c, { veil: 0.6, horizon: 0.66, gridAlpha: 0.17 });
+  const age = UIKIT.screenAge();
+  drawScreenBackdrop(c, { veil: 0.48, horizon: 0.72, gridAlpha: 0.11, scan: 0.10 });
+  drawLaunchBackdrop(c, W, H, pad, S);
 
-  /* ---------------------------------------------------------- titre ----- */
-  const titleTop = Math.max(CANVAS_HEIGHT * 0.13, 46 * S);
-  let titleSize = clamp(CANVAS_WIDTH * 0.082, 40, 104) * (CANVAS_HEIGHT < 560 ? 0.78 : 1);
-  // ajustement pour ne jamais déborder
-  while (titleSize > 26 &&
-         UIKIT.vectorWidth('GALABOB', titleSize, { tracking: titleSize * 0.34 }) > CANVAS_WIDTH * 0.78) {
-    titleSize *= 0.94;
-  }
-
-  const inTitle = UIKIT.enter(0.02, 0.55);
-  const breathe = 1 + UIKIT.osc(0.22, 0.012);
-  const tSize = titleSize * breathe * clamp(inTitle, 0, 1.06);
-
-  UIKIT.vectorTitle(c, 'GALABOB', cx, titleTop, tSize, PALETTE.ui.text, {
-    align: 'center',
-    slant: 0.08,
-    tracking: tSize * 0.34,
-    width: Math.max(1.3, tSize * 0.05),
-    alpha: clamp(inTitle, 0, 1),
-    glitch: 0.04
+  const titleX = pad;
+  const titleY = compact ? 38 : 50;
+  // Borné aussi par la hauteur : sur une fenêtre large et basse, le slogan
+  // venait chevaucher « CHOISISSEZ VOTRE MISSION ».
+  let titleSize = clamp(Math.min(W * 0.063, H * 0.105), 40, 82);
+  while (titleSize > 38 && UIKIT.vectorWidth('GALABOB', titleSize, { tracking: titleSize * 0.25 }) > W * 0.51) titleSize *= 0.94;
+  const titleIn = clamp(UIKIT.enter(0.02, 0.48), 0, 1);
+  UIKIT.label(c, 'PONT DE LANCEMENT // 01', titleX, titleY, PALETTE.ui.textDim, {
+    size: 10 * S, tracking: 4.2 * S, alpha: 0.68 * titleIn
   });
-
-  // sous-titre + filets
-  const subY = titleTop + tSize + 30 * S;
-
-  // Reflet au sol : écrasé verticalement, presque éteint.
-  // Il est DÉTOURÉ à la bande libre entre le bas du titre et le sous-titre.
-  // Sans ce détourage, le reflet (52 px de haut) traversait le sous-titre et
-  // ses lettres inversées se lisaient comme des octogones flottants — un
-  // artefact qu'on prenait pour une rémanence de rendu.
-  const refTop = titleTop + tSize + 4 * S;
-  const refBottom = subY - 14 * S;
-  if (refBottom > refTop + 2) {
-    c.save();
-    c.beginPath();
-    c.rect(0, refTop, CANVAS_WIDTH, refBottom - refTop);
-    c.clip();
-    c.translate(0, (titleTop + tSize) * 1.5 + 8 * S);
-    c.scale(1, -0.5);
-    UIKIT.vector(c, 'GALABOB', cx, titleTop, tSize, PALETTE.ui.accent, {
-      align: 'center', slant: 0.08, tracking: tSize * 0.34,
-      width: Math.max(1, tSize * 0.045), alpha: 0.16 * clamp(inTitle, 0, 1), halo: false, passes: 2
-    });
-    c.restore();
-  }
-
-  const inSub = UIKIT.enter(0.18, 0.5);
-  const subTxt = 'ASSAUT VECTORIEL · ÉDITION NÉON';
-  const subW = UIKIT.label(c, subTxt, cx, subY, PALETTE.ui.accent, {
-    size: 12 * S, tracking: 6 * S, align: 'center', alpha: 0.75 * clamp(inSub, 0, 1)
+  UIKIT.vectorTitle(c, 'GALABOB', titleX, titleY + 22 * S, titleSize, PALETTE.ui.text, {
+    align: 'left', slant: 0.07, tracking: titleSize * 0.25,
+    width: Math.max(1.5, titleSize * 0.052), alpha: titleIn, glitch: 0.018
   });
-  const ruleW = (CANVAS_WIDTH * 0.3) * clamp(inSub, 0, 1);
-  const rule = new Path2D();
-  rule.moveTo(cx - subW / 2 - 18 * S - ruleW, subY - 4 * S);
-  rule.lineTo(cx - subW / 2 - 18 * S, subY - 4 * S);
-  rule.moveTo(cx + subW / 2 + 18 * S, subY - 4 * S);
-  rule.lineTo(cx + subW / 2 + 18 * S + ruleW, subY - 4 * S);
-  NEON.custom(c, rule, 'player', 1.2, { alpha: 0.32 * clamp(inSub, 0, 1), cap: 'butt' });
+  UIKIT.label(c, 'FRANCHISSEZ LA LIGNE. BRISEZ LA FORMATION.', titleX, titleY + 35 * S + titleSize,
+    PALETTE.ui.accent, { size: 11 * S, tracking: 3.4 * S, alpha: 0.76 * titleIn });
 
-  /* ---------------------------------------------- meilleur score -------- */
-  MENU_STATE.bestShown = rollTowards(MENU_STATE.bestShown, Number(highScore) || 0, dt, 0.0009);
-  const bestY = CANVAS_HEIGHT / 2 - 78;
-  const inBest = clamp(UIKIT.enter(0.3, 0.5), 0, 1);
-  UIKIT.label(c, 'MEILLEUR SCORE', cx, bestY - 16, PALETTE.ui.textDim, {
-    size: 11 * S, tracking: 5 * S, align: 'center', alpha: 0.75 * inBest
+  // Record DU MODE sélectionné : la globale `highScore` est toutes-catégories.
+  const modeRecord = runtime?.profile?.mode?.(mode?.id)?.highScore;
+  const record = Number.isFinite(Number(modeRecord)) ? Number(modeRecord) : (Number(highScore) || 0);
+  MENU_STATE.bestShown = rollTowards(MENU_STATE.bestShown, record, FRAME.rawDt, 0.0009);
+  UIKIT.label(c, 'RECORD DE BORD', W - pad, titleY + 2, PALETTE.ui.textDim, {
+    size: Math.max(8, 9 * S), tracking: 3.4 * S, align: 'right', alpha: 0.62
   });
-  UIKIT.vector(c, String(Math.round(MENU_STATE.bestShown)), cx, bestY, 26 * S, PALETTE.ui.combo, {
-    align: 'center', tracking: 7 * S, width: 2 * S, alpha: inBest
+  UIKIT.vector(c, String(Math.round(MENU_STATE.bestShown)), W - pad, titleY + 18 * S,
+    24 * S, PALETTE.ui.combo, { align: 'right', tracking: 5 * S, width: 1.8 * S, alpha: 0.92 });
+
+  const splitX = menuSplitX(W);
+  const leftW = splitX - pad - 34 * S;
+  const panelY = Math.max(compact ? H * 0.32 : H * 0.34, titleY + 35 * S + titleSize + 44 * S);
+  const reveal = clamp(UIKIT.enter(0.20, 0.52), 0, 1);
+
+  UIKIT.label(c, 'CHOISISSEZ VOTRE MISSION', titleX, panelY - 27 * S, PALETTE.ui.textDim, {
+    size: 10 * S, tracking: 4.5 * S, alpha: 0.64 * reveal
   });
+  // L'écart laisse la place au chevron de survol du second bouton.
+  const gap = 30 * S;
+  const modeW = (leftW - gap) / 2;
+  const modeH = compact ? 42 * S : 50 * S;
+  drawModeChoice(c, 'arcade', 'ARCADE', titleX, panelY, modeW, modeH, mode?.id, reveal, PALETTE.ui.accent);
+  drawModeChoice(c, 'assault', 'ASSAUT', titleX + modeW + gap, panelY, modeW, modeH, mode?.id, reveal, PALETTE.ui.combo);
 
-  /* ------------------------------------------------------ entrées ------- */
-  const bw = clamp(CANVAS_WIDTH * 0.26, 220, 340);
-  const bh = 46;
-  const playY = Math.max(bestY + 42, CANVAS_HEIGHT / 2 - 20);
-  const choiceY = playY + 56;
-  const setY = choiceY + 44;
-  const choiceGap = 10;
-  const choiceW = (bw - choiceGap) / 2;
+  const detailY = panelY + modeH + 24 * S;
+  const assault = mode?.id === 'assault';
+  UIKIT.label(c, assault ? 'CAMPAGNE TACTIQUE' : 'SURVIE ARCADE', titleX, detailY,
+    assault ? PALETTE.ui.combo : PALETTE.ui.accent, { size: 12 * S, tracking: 3.6 * S, alpha: 0.9 * reveal });
+  UIKIT.label(c, assault ? 'MUNITIONS · ARSENAL · 30 STAGES' : 'POWER-UPS · COMBOS · 100 STAGES', titleX, detailY + 22 * S,
+    PALETTE.ui.textDim, { size: 10 * S, tracking: 2.4 * S, alpha: 0.7 * reveal });
 
-  const inPlay = clamp(UIKIT.enter(0.4, 0.5), 0, 1);
-  const inSet = clamp(UIKIT.enter(0.48, 0.5), 0, 1);
-
+  const launchY = detailY + (compact ? 42 : 52) * S;
   UIKIT.button(c, {
-    id: 'menu.play',
-    x: cx - bw / 2 + (1 - inPlay) * 40, y: playY, w: bw, h: bh,
-    label: 'JOUER', hint: 'ENTRÉE', hintW: 62,
-    primary: true, alpha: inPlay,
-    color: PALETTE.ui.accent,
+    id: 'menu.play', x: titleX, y: launchY, w: leftW, h: compact ? 52 * S : 62 * S,
+    label: 'LANCER LA PARTIE', hint: 'ENTRÉE', hintW: 66 * S,
+    primary: true, alpha: reveal, size: compact ? 16 * S : 19 * S,
+    color: assault ? PALETTE.ui.combo : PALETTE.ui.accent,
     action: function () { if (typeof initGame === 'function') initGame(); }
   });
 
   UIKIT.button(c, {
-    id: 'menu.mode',
-    x: cx - bw / 2, y: choiceY, w: choiceW, h: bh - 10,
-    label: ((window.GALABOB && window.GALABOB.modes.current())
-      ? window.GALABOB.modes.current().label.toUpperCase()
-      : 'ARCADE'),
-    alpha: inSet, size: 11,
-    color: PALETTE.ui.combo,
-    action: function () {
-      if (window.GALABOB && typeof window.GALABOB.selectNextMode === 'function') {
-        window.GALABOB.selectNextMode();
-      }
-    }
-  });
-
-  UIKIT.button(c, {
-    id: 'menu.ship',
-    x: cx - bw / 2 + choiceW + choiceGap, y: choiceY, w: choiceW, h: bh - 10,
-    label: ((window.GALABOB && window.GALABOB.ships && window.GALABOB.profile)
-      ? (window.GALABOB.ships.get(window.GALABOB.profile.data.selectedShip)?.label || 'CLASSIQUE').toUpperCase()
-      : 'CLASSIQUE'),
-    alpha: inSet, size: 10.5,
-    color: PALETTE.ui.accentAlt,
-    action: function () {
-      if (window.GALABOB && typeof window.GALABOB.selectNextShip === 'function') {
-        window.GALABOB.selectNextShip();
-      }
-    }
-  });
-
-  UIKIT.button(c, {
-    id: 'menu.settings',
-    x: cx - bw / 2 - (1 - inSet) * 40, y: setY, w: bw, h: bh - 6,
-    label: 'PARAMÈTRES', hint: 'S', hintW: 26,
-    alpha: inSet, size: 15,
-    color: PALETTE.ui.accentAlt,
+    id: 'menu.settings', x: titleX, y: launchY + (compact ? 65 : 76) * S,
+    w: Math.min(leftW, 210 * S), h: 36 * S, label: 'PARAMÈTRES', hint: 'S', hintW: 24 * S,
+    alpha: reveal, size: 11 * S, align: 'left', color: PALETTE.ui.accentAlt,
     action: function () { gameState = 'settings'; }
   });
 
-  /* -------------------------------------------------------- audio ------- */
-  // Rectangle historique lu par js/core/input.js : NE PAS DÉPLACER.
-  const sb = UIKIT.hitRects.soundButton();
-  let controlsY;
+  drawMenuShipBay(c, ship, splitX, W, H, pad, S, age);
+  drawMenuAudio(c, pad, W, H, S);
 
-  if (!uiAudioReady()) {
-    UIKIT.label(c, 'ANALYSE DES PISTES AUDIO…', cx, sb.y + 26, PALETTE.ui.textWarm, {
-      size: 13, tracking: 3.5, align: 'center', alpha: 0.6 + 0.4 * Math.abs(Math.sin(FRAME.realTime * 2))
-    });
-    controlsY = sb.y + 62;
-  } else if (!uiSoundEnabled()) {
-    UIKIT.label(c, 'SON DÉSACTIVÉ — CLIQUEZ POUR L’ACTIVER', cx, sb.y - 16,
-      PALETTE.ui.textWarm, { size: 11, tracking: 3.2, align: 'center', alpha: 0.75 });
-
-    UIKIT.button(c, {
-      id: 'menu.sound',
-      x: sb.x, y: sb.y, w: sb.width, h: sb.height,
-      label: 'ACTIVER LE SON', size: 12.5, labelDx: 11,
-      color: PALETTE.ui.good,
-      legacy: true               // l'action reste gérée par js/core/input.js
-    });
-
-    // petite icône de haut-parleur, calée à gauche du libellé
-    const ic = new Path2D();
-    const ix = sb.x + 26, iy = sb.y + sb.height / 2;
-    ic.moveTo(ix - 5, iy - 2.5); ic.lineTo(ix - 1.5, iy - 2.5); ic.lineTo(ix + 2.5, iy - 6.5);
-    ic.lineTo(ix + 2.5, iy + 6.5); ic.lineTo(ix - 1.5, iy + 2.5); ic.lineTo(ix - 5, iy + 2.5);
-    ic.closePath();
-    ic.moveTo(ix + 6, iy - 3.5); ic.lineTo(ix + 8, iy); ic.lineTo(ix + 6, iy + 3.5);
-    NEON.custom(c, ic, PALETTE.ui.good, 1.3, { alpha: 0.65 + 0.35 * Math.sin(FRAME.realTime * 4) });
-
-    controlsY = sb.y + sb.height + 42;
-  } else {
-    const on = new Path2D();
-    const ix = cx - 58, iy = sb.y + 8;
-    on.moveTo(ix - 5, iy - 3); on.lineTo(ix - 1, iy - 3); on.lineTo(ix + 4, iy - 7);
-    on.lineTo(ix + 4, iy + 7); on.lineTo(ix - 1, iy + 3); on.lineTo(ix - 5, iy + 3);
-    on.closePath();
-    NEON.custom(c, on, PALETTE.ui.good, 1.3, { alpha: 0.75 });
-    UIKIT.label(c, 'SON ACTIF', cx + 6, sb.y + 13, PALETTE.ui.good, {
-      size: 12, tracking: 4, align: 'center', alpha: 0.8
-    });
-    controlsY = sb.y + 46;
-  }
-
-  /* ------------------------------------------------------ contrôles ----- */
-  drawControlsPanel(c, cx, controlsY, S);
-
+  // Rappel des commandes : le raccourci T reste un outil de développement,
+  // volontairement absent d'ici.
+  const footSize = Math.max(8, 9 * S);
+  UIKIT.label(c, 'ZQSD / FLÈCHES  PILOTER   ·   ESPACE  TIRER   ·   P  PAUSE   ·   ÉCHAP  QUITTER', W - pad, H - 42 * S,
+    PALETTE.ui.textDim, { size: footSize, tracking: 2.2 * S, align: 'right', alpha: 0.54 });
+  UIKIT.label(c, 'M  MODE   ·   V  VAISSEAU   ·   S  PARAMÈTRES', W - pad, H - 26 * S,
+    PALETTE.ui.textDim, { size: footSize, tracking: 2.2 * S, align: 'right', alpha: 0.54 });
   UIKIT.endScreen();
 }
 
-/** Rappel des commandes. Se réduit automatiquement si la place manque. */
-function drawControlsPanel(c, cx, y, S) {
-  const room = CANVAS_HEIGHT - y;
-  const inC = clamp(UIKIT.enter(0.6, 0.6), 0, 1);
-  if (inC <= 0.01 || room < 46) return;
+/** Frontière colonne de gauche / baie du vaisseau, partagée par tous les dessins du menu.
+ *  Sous ~700 px de large, l'ancien plancher (430) dépassait le plafond et la baie
+ *  se retrouvait écrasée contre le bord droit. */
+function menuSplitX(W) {
+  const max = W - 270;
+  return clamp(W * 0.57, Math.min(430, max), max);
+}
 
-  const compact = room < 150 || CANVAS_HEIGHT < 700;
-
-  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
-  const assault = !!(runtime && runtime.modes && runtime.modes.current() && runtime.modes.current().id === 'assault');
-  const pilotKeys = assault ? 'ZQSD / FLÈCHES' : '← →';
-  const rows = compact
-    ? [[pilotKeys, 'PILOTER'], ['ESPACE', 'TIRER'], ['P', 'PAUSE']]
-    : [
-        [pilotKeys, 'PILOTER'], ['ESPACE', 'TIRER'],
-        ['P', 'PAUSE'], ['ESC', 'QUITTER'],
-        ['A', 'AUDIO'], ['M', 'MUSIQUE'],
-        ['N', 'NARRATION'], ['F3', 'STATS']
-      ];
-
-  const cols = compact ? rows.length : 2;
-  const lines = Math.ceil(rows.length / cols);
-  const lineH = 26 * S;
-  const colW = compact ? clamp(CANVAS_WIDTH / (cols + 1), 110, 190) : 190 * S;
-  const totalW = cols * colW;
-  const x0 = cx - totalW / 2;
-
-  UIKIT.label(c, 'COMMANDES', cx, y, PALETTE.ui.textDim, {
-    size: 10 * S, tracking: 5 * S, align: 'center', alpha: 0.6 * inC
+function drawModeChoice(c, id, label, x, y, w, h, current, alpha, color) {
+  const active = current === id;
+  if (active) {
+    NEON.line(c, x + 10, y - 5, x + w - 10, y - 5, color, 2.4, { alpha: alpha * 0.9, passes: 3, cap: 'butt' });
+    const S = UIKIT.scale();
+    UIKIT.label(c, 'ACTIF', x + w - 10 * S, y + 13 * S, color, { size: Math.max(7.5, 7.5 * S), tracking: 2 * S, align: 'right', alpha: alpha * 0.72 });
+  }
+  UIKIT.button(c, {
+    id: 'menu.mode.' + id, x, y, w, h, label, alpha, size: 14 * UIKIT.scale(),
+    color, action: function () { window.GALABOB?.selectMode?.(id); }
   });
+}
 
-  const top = y + 14 * S;
-  for (let i = 0; i < rows.length; i++) {
-    const col = compact ? i : (i % cols);
-    const line = compact ? 0 : Math.floor(i / cols);
-    if (top + line * lineH > CANVAS_HEIGHT - 18) break;
-    const rx = x0 + col * colW;
-    const ry = top + line * lineH;
-    const kw = UIKIT.keycap(c, rx, ry, rows[i][0], {
-      size: 11 * S, height: 19 * S, color: PALETTE.ui.accent, alpha: 0.55 * inC
-    });
-    UIKIT.label(c, rows[i][1], rx + kw + 9 * S, ry + 14 * S, PALETTE.ui.textDim, {
-      size: 11 * S, tracking: 2.4 * S, alpha: 0.7 * inC
+function drawLaunchBackdrop(c, W, H, pad, S) {
+  const splitX = menuSplitX(W);
+  const divider = new Path2D();
+  divider.moveTo(splitX, H * 0.24); divider.lineTo(splitX - 28 * S, H * 0.79);
+  NEON.custom(c, divider, 'player', 1.1, { alpha: 0.20, halo: false, dash: [5, 12] });
+  // Centre commun avec drawMenuShipBay : les anneaux orbitent autour de la coque.
+  const orbitX = (splitX + 20 * S + W - pad) / 2, orbitY = H * 0.45;
+  for (let i = 0; i < 3; i++) {
+    NEON.ring(c, orbitX, orbitY, (88 + i * 42) * S, 0.8, i === 1 ? 'combo' : 'player', {
+      alpha: 0.07 + i * 0.025, dash: i === 1 ? [8, 18] : [2, 14],
+      dashOffset: (i % 2 ? -1 : 1) * FRAME.realTime * (8 + i * 4), passes: 1, halo: false
     });
   }
-  void lines;
+  NEON.line(c, pad, H - 17 * S, W - pad, H - 17 * S, 'player', 1, { alpha: 0.13, passes: 1, halo: false });
+}
+
+function drawMenuShipBay(c, ship, splitX, W, H, pad, S, age) {
+  const bayLeft = splitX + 20 * S;
+  const bayRight = W - pad;
+  const cx = (bayLeft + bayRight) / 2;
+  const cy = H * 0.45;
+  const enter = UIKIT.reduceMotion ? 1 : clamp(UIKIT.easeOutCubic((age - 0.16) / 0.65), 0, 1);
+  const bob = UIKIT.reduceMotion ? 0 : Math.sin(FRAME.realTime * 1.8) * 4 * S;
+  const scale = clamp(Math.min(W, H) * 0.0047, 2.5, 4.0) * enter;
+
+  c.save();
+  c.translate(cx, cy + bob + (1 - enter) * 32);
+  c.rotate(Math.sin(FRAME.realTime * 0.7) * 0.025);
+  c.scale(scale, scale);
+  const rendered = ship && window.GALABOB?.shipRenderers?.draw?.(ship.renderer, c, {
+    alpha: 0.96, time: FRAME.realTime, charge: 0.28 + Math.sin(FRAME.realTime * 2.2) * 0.12
+  });
+  if (!rendered && typeof window.drawClassicPlayerHull === 'function') {
+    window.drawClassicPlayerHull(c, { alpha: 0.96, time: FRAME.realTime, charge: 0.2 });
+  }
+  c.restore();
+
+  const flame = 18 * S + Math.sin(FRAME.realTime * 28) * 4 * S;
+  for (const side of [-1, 1]) NEON.line(c, cx + side * 20 * S, cy + 35 * S + bob,
+    cx + side * 20 * S, cy + 35 * S + bob + flame, 'playerThruster', 2.2 * S,
+    { alpha: 0.56 * enter, passes: 3 });
+
+  const nameY = cy + 115 * S;
+  const label = (ship?.label || 'Vaisseau classique').replace(/^Vaisseau\s+/i, '').toUpperCase();
+  UIKIT.label(c, 'APPAREIL SÉLECTIONNÉ', cx, nameY - 23 * S, PALETTE.ui.textDim, {
+    size: Math.max(8, 8.5 * S), tracking: 3.5 * S, align: 'center', alpha: 0.60 * enter
+  });
+  UIKIT.vector(c, label, cx, nameY, clamp(18 * S, 12, 24), PALETTE.ui.accent, {
+    align: 'center', tracking: 3 * S, width: 1.5 * S, alpha: enter
+  });
+
+  const arrowW = 42 * S, arrowH = 34 * S;
+  UIKIT.button(c, { id: 'menu.ship.prev', x: bayLeft, y: nameY - 9 * S, w: arrowW, h: arrowH,
+    label: '<', alpha: enter, size: 15 * S, color: PALETTE.ui.accentAlt,
+    action: function () { window.GALABOB?.selectNextShip?.(-1); } });
+  UIKIT.button(c, { id: 'menu.ship.next', x: bayRight - arrowW, y: nameY - 9 * S, w: arrowW, h: arrowH,
+    label: '>', alpha: enter, size: 15 * S, color: PALETTE.ui.accentAlt,
+    action: function () { window.GALABOB?.selectNextShip?.(1); } });
+
+  const stats = ship?.stats || { speedMultiplier: 1, fireRateMultiplier: 1, hitboxMultiplier: 1 };
+  const statY = nameY + 48 * S;
+  drawMenuStat(c, 'VITESSE', stats.speedMultiplier, bayLeft, statY, bayRight - bayLeft, S, enter);
+  drawMenuStat(c, 'CADENCE', stats.fireRateMultiplier, bayLeft, statY + 23 * S, bayRight - bayLeft, S, enter);
+  // Une hitbox plus petite = plus facile à esquiver : la jauge monte quand le gabarit descend.
+  drawMenuStat(c, 'ESQUIVE', 2 - stats.hitboxMultiplier, bayLeft, statY + 46 * S, bayRight - bayLeft, S, enter);
+}
+
+function drawMenuStat(c, label, value, x, y, w, S, alpha) {
+  const barX = x + 76 * S, barW = Math.max(50, w - 76 * S);
+  UIKIT.label(c, label, x, y + 4 * S, PALETTE.ui.textDim, { size: Math.max(8, 8 * S), tracking: 2.2 * S, alpha: 0.58 * alpha });
+  UIKIT.bar(c, barX, y, barW, 4 * S, clamp((value - 0.65) / 0.7, 0.08, 1), PALETTE.ui.accent, {
+    segments: 5, alpha: 0.62 * alpha, head: false
+  });
+}
+
+function drawMenuAudio(c, pad, W, H, S) {
+  const sb = UIKIT.hitRects.soundButton();
+  if (!uiAudioReady()) {
+    UIKIT.label(c, 'AUDIO EN INITIALISATION…', pad, H - 34 * S, PALETTE.ui.textWarm, {
+      size: Math.max(8, 9 * S), tracking: 2.4 * S, alpha: 0.65
+    });
+  } else if (!uiSoundEnabled()) {
+    UIKIT.button(c, { id: 'menu.sound', x: sb.x, y: sb.y, w: sb.width, h: sb.height,
+      label: 'ACTIVER LE SON', size: Math.max(10, 10 * S), align: 'left', color: PALETTE.ui.good, legacy: true });
+  } else {
+    NEON.dot(c, pad + 3 * S, H - 31 * S, 2.2 * S, PALETTE.ui.good, { alpha: 0.82, glowScale: 0.8 });
+    UIKIT.label(c, 'AUDIO ACTIF', pad + 14 * S, H - 27 * S, PALETTE.ui.good, {
+      size: Math.max(8, 9 * S), tracking: 2.7 * S, alpha: 0.66
+    });
+  }
 }
 
 /* =============================================================================
@@ -1200,7 +1173,10 @@ function drawPauseMenu() {
     x: cx - bw / 2, y: by + 50, w: bw, h: 36,
     label: 'QUITTER', hint: 'ESC', hintW: 34, size: 13,
     color: PALETTE.ui.warn,
-    action: function () { gameState = 'menu'; isPaused = false; }
+    action: function () {
+      if (typeof returnToMenu === 'function') returnToMenu();
+      else { gameState = 'menu'; isPaused = false; }
+    }
   });
 
   UIKIT.endScreen();
@@ -1597,7 +1573,10 @@ function drawGameOverScreen() {
     label: 'MENU PRINCIPAL', hint: 'ESC', hintW: 34, size: 13,
     color: PALETTE.ui.accentAlt,
     alpha: clamp(UIKIT.enter(0.58, 0.45), 0, 1),
-    action: function () { gameState = 'menu'; }
+    action: function () {
+      if (typeof returnToMenu === 'function') returnToMenu();
+      else gameState = 'menu';
+    }
   });
 
   UIKIT.endScreen();

@@ -270,7 +270,7 @@ function addPlayerShield(n) {
 /** Consomme UNE charge de bouclier à la place d'une vie.
  *  Appelée par le pont de powerups.js, en amont de damagePlayer().
  *  @returns {boolean} true si le coup a été absorbé. */
-function consumePlayerShield(source) {
+function consumePlayerShield(source, effectX, effectY) {
   if (!player || !(player.shield > 0)) return false;
 
   player.shield -= 1;
@@ -283,8 +283,8 @@ function consumePlayerShield(source) {
   player.iframeTimer = Math.max(player.iframeTimer || 0, PLAYER_SHIELD_IFRAME_MS);
   player.iframeDuration = Math.max(player.iframeDuration || 0, PLAYER_SHIELD_IFRAME_MS);
 
-  const cx = player.x + player.width / 2;
-  const cy = player.y + player.height / 2;
+  const cx = Number.isFinite(effectX) ? effectX : player.x + player.width / 2;
+  const cy = Number.isFinite(effectY) ? effectY : player.y + player.height / 2;
   const col = PALETTE.get('playerShield');
 
   // Rupture spectaculaire : gel net, secousse franche, éclat cyan.
@@ -411,6 +411,19 @@ function updatePlayer(deltaTime) {
   updateMuzzleFlashes(deltaTime);
 }
 
+/** Fait vivre uniquement l'équipement partagé pendant une séquence qui pilote
+ *  elle-même le vaisseau (poursuite 3D). Les durées continuent donc réellement
+ *  entre deux stages sans déclencher le déplacement ou les tirs 2D. */
+function updatePlayerPowerState(deltaTime) {
+  const dt = deltaTime / 1000;
+  if (!(dt > 0)) return;
+  if (typeof ensurePowerUpBridges === 'function') ensurePowerUpBridges();
+  updatePlayerModifiers(deltaTime, dt);
+  updatePlayerWeaponTimer(deltaTime);
+  updatePlayerShield(deltaTime, dt);
+  player.laser.on = false;
+}
+
 /* ------------------------------------------------ modificateurs cumulables */
 
 /** Décompte INDÉPENDANT de chaque modificateur + fondu du bullet-time. */
@@ -447,8 +460,7 @@ function updatePlayerMovement(dt) {
   const dir = (typeof INPUT !== 'undefined' && INPUT.axisX)
     ? INPUT.axisX()
     : ((keys['ArrowRight'] || keys['Right'] ? 1 : 0) - (keys['ArrowLeft'] || keys['Left'] ? 1 : 0));
-  const assault = (_playerGameMode() || {}).id === 'assault';
-  const dirY = assault && typeof INPUT !== 'undefined' && INPUT.axisY ? INPUT.axisY() : 0;
+  const dirY = typeof INPUT !== 'undefined' && INPUT.axisY ? INPUT.axisY() : 0;
 
   // player.speed est en px/s (player.usesPxPerSecond = true).
   const maxSpeed = (player.speed > 0 ? player.speed : TEMPO.PLAYER_SPEED);
@@ -462,8 +474,8 @@ function updatePlayerMovement(dt) {
   player.vx = damp(player.vx, target, rate, dt);
   if (dir === 0 && Math.abs(player.vx) < 2) player.vx = 0;
 
-  // L'Assaut se joue dans une bande basse en 2D : assez de latitude pour
-  // esquiver et choisir sa distance, sans pouvoir traverser la formation.
+  // Tous les modes se jouent dans une bande basse en 2D : assez de latitude
+  // pour esquiver et choisir sa distance, sans traverser la formation.
   const verticalSpeed = maxSpeed * 0.68;
   const targetYSpeed = dirY * verticalSpeed;
   const verticalRate = dirY === 0 ? PLAYER_RATE_BRAKE : PLAYER_RATE_ACCEL;
@@ -471,7 +483,7 @@ function updatePlayerMovement(dt) {
   if (dirY === 0 && Math.abs(player.vy) < 2) player.vy = 0;
 
   player.x += player.vx * dt;
-  if (assault) player.y += player.vy * dt;
+  player.y += player.vy * dt;
 
   // Bords : petit rebond amorti, plus vivant qu'un arrêt net.
   const minX = TEMPO.PLAYER_MARGIN;
@@ -485,18 +497,14 @@ function updatePlayerMovement(dt) {
   }
 
 
-  if (assault) {
-    const minY = CANVAS_HEIGHT * 0.60;
-    const maxY = CANVAS_HEIGHT - player.height - TEMPO.PLAYER_MARGIN;
-    if (player.y < minY) {
-      player.y = minY;
-      if (player.vy < 0) player.vy *= -0.14;
-    } else if (player.y > maxY) {
-      player.y = maxY;
-      if (player.vy > 0) player.vy *= -0.14;
-    }
-  } else {
-    player.vy = 0;
+  const minY = CANVAS_HEIGHT * 0.60;
+  const maxY = CANVAS_HEIGHT - player.height - TEMPO.PLAYER_MARGIN;
+  if (player.y < minY) {
+    player.y = minY;
+    if (player.vy < 0) player.vy *= -0.14;
+  } else if (player.y > maxY) {
+    player.y = maxY;
+    if (player.vy > 0) player.vy *= -0.14;
   }
 
   // Inclinaison visuelle et régime du réacteur.
@@ -1504,6 +1512,8 @@ function drawPlayer() {
 }
 
 function drawClassicPlayerHull(c, state) {
+  // Le menu peut demander un aperçu avant la toute première frame de jeu.
+  if (!_shipHull) _buildShipPaths();
   const alpha = state.alpha;
   const t = state.time;
   // Coque : halo large + noyau blanc.
@@ -1686,6 +1696,8 @@ window.playerTimeScale = playerTimeScale;
 window.playerMagnetRange = playerMagnetRange;
 window.playerMagnetPull = playerMagnetPull;
 window.resetPlayerPowerState = resetPlayerPowerState;
+window.updatePlayerPowerState = updatePlayerPowerState;
+window.playerActiveWeapons = playerActiveWeapons;
 window.applyPlayerDamageToEnemy = applyPlayerDamageToEnemy;
 window.PLAYER_WEAPONS = PLAYER_WEAPONS;
 window.PLAYER_WEAPON_LABELS = PLAYER_WEAPON_LABELS;

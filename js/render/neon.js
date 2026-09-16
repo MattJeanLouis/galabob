@@ -429,18 +429,18 @@ const NEON = (function () {
   /** Qualité adaptative : rétrograde si le framerate s'effondre durablement. */
   function tick() {
     if (!RENDER_CONFIG.autoQuality) return;
-    // On n'évalue la qualité qu'en jeu et après le démarrage : le chargement
-    // des ressources fait chuter le framerate sans que le rendu soit en cause.
-    if (FRAME.frame < 600) return;
-    if (typeof gameState !== 'undefined' && gameState !== 'playing') return;
+    if (FRAME.hidden || FRAME.frame < 90) return;
     // SEUIL À 57, ET NON 45. Rater la synchronisation verticale d'une fraction
     // de milliseconde fait alterner l'affichage entre 60 et 30 fps : une frame
     // médiane à 17,9 ms pour un budget de 16,7 saccade DAVANTAGE qu'un 45 fps
     // stable. On dégrade donc bien avant l'effondrement, tant qu'il est encore
     // temps de repasser sous le budget.
     if (FRAME.fps < 57) {
-      S.slowFrames++;
-      if (S.slowFrames > 90) {
+      // Pendant l'amorçage on converge vite vers un réglage viable. À 20 fps,
+      // attendre 90 frames par palier entretenait le lag pendant des minutes.
+      S.slowFrames += FRAME.fps < 42 ? 3 : 1;
+      const threshold = FRAME.frame < 600 ? 30 : 90;
+      if (S.slowFrames > threshold) {
         S.slowFrames = 0;
         // On sacrifie D'ABORD la résolution. Le coût est proportionnel à la
         // surface, donc c'est le levier le plus efficace — et un pixel ratio
@@ -489,7 +489,9 @@ const NEON = (function () {
     return p;
   }
 
-  /** Cœur du style néon : 4 passes additives, du halo large au noyau fin. */
+  /** Cœur du style néon : contour mat par défaut, émission sur demande.
+   *  Le bloom final fournit déjà le halo commun à la scène ; rendre aussi
+   *  chaque primitive additive faisait blanchir tous les chevauchements. */
   function strokeNeon(c, path, colorSpec, width, opts) {
     if (!c || !path) return;
     opts = opts || {};
@@ -498,10 +500,10 @@ const NEON = (function () {
     const alpha = (opts.alpha == null ? 1 : opts.alpha);
     if (alpha <= 0.002) return;
     const gs = (opts.glowScale == null ? 1 : opts.glowScale);
-    const passes = opts.passes == null ? (RENDER_CONFIG.quality >= 2 ? 4 : 3) : opts.passes;
+    const passes = opts.passes == null ? (RENDER_CONFIG.quality >= 1 ? 3 : 2) : opts.passes;
 
     c.save();
-    c.globalCompositeOperation = opts.composite || 'lighter';
+    c.globalCompositeOperation = opts.composite || 'source-over';
     c.lineCap = opts.cap || 'round';
     c.lineJoin = opts.join || 'round';
     if (opts.dash) c.setLineDash(opts.dash);
@@ -510,21 +512,21 @@ const NEON = (function () {
     c.strokeStyle = col.glow;
 
     if (passes >= 4 && opts.halo !== false) {
-      c.globalAlpha = alpha * 0.16;
-      c.lineWidth = w * 5.2 * gs;
+      c.globalAlpha = alpha * 0.09;
+      c.lineWidth = w * 4.2 * gs;
       c.stroke(path);
     }
     if (passes >= 3 && opts.halo !== false) {
-      c.globalAlpha = alpha * 0.34;
-      c.lineWidth = w * 2.6 * gs;
+      c.globalAlpha = alpha * 0.22;
+      c.lineWidth = w * 2.2 * gs;
       c.stroke(path);
     }
-    c.globalAlpha = alpha * 0.92;
+    c.globalAlpha = alpha * 0.84;
     c.lineWidth = Math.max(0.5, w * 1.15);
     c.stroke(path);
 
     c.strokeStyle = col.core;
-    c.globalAlpha = alpha;
+    c.globalAlpha = alpha * 0.92;
     c.lineWidth = Math.max(0.5, opts.coreWidth != null ? opts.coreWidth : w * 0.46);
     c.stroke(path);
 
@@ -538,12 +540,12 @@ const NEON = (function () {
     const alpha = (opts.alpha == null ? 1 : opts.alpha);
     if (alpha <= 0.002) return;
     c.save();
-    c.globalCompositeOperation = opts.composite || 'lighter';
-    c.globalAlpha = alpha * (opts.glowAlpha == null ? 0.28 : opts.glowAlpha);
+    c.globalCompositeOperation = opts.composite || 'source-over';
+    c.globalAlpha = alpha * (opts.glowAlpha == null ? 0.18 : opts.glowAlpha);
     c.fillStyle = col.glow;
     c.fill(path);
     if (opts.core !== false) {
-      c.globalAlpha = alpha * (opts.coreAlpha == null ? 0.55 : opts.coreAlpha);
+      c.globalAlpha = alpha * (opts.coreAlpha == null ? 0.34 : opts.coreAlpha);
       c.fillStyle = col.core;
       c.fill(path);
     }
@@ -570,7 +572,7 @@ const NEON = (function () {
     setAberration: function (px) { RENDER_CONFIG.aberration = Math.max(0, px); },
     setTrails: function (on, fade) {
       RENDER_CONFIG.trails = !!on;
-      if (fade != null) RENDER_CONFIG.trailFade = clampNum(fade, 0, 0.75);
+      if (fade != null) RENDER_CONFIG.trailFade = clampNum(fade, 0, 0.92);
     },
 
     /** Purge la persistance à la frame suivante. À appeler à chaque fois qu'on
@@ -617,8 +619,8 @@ const NEON = (function () {
       strokeNeon(c, p, color, width, opts);
     },
 
-    /** Point lumineux plein : 3 disques additifs concentriques, aucun gradient
-     *  alloué par frame. */
+    /** Point lumineux plein : 3 disques concentriques, aucun gradient alloué
+     *  par frame. L'additif doit être demandé pour les éléments prioritaires. */
     dot: function (c, x, y, r, color, opts) {
       if (!c) return;
       opts = opts || {};
@@ -627,16 +629,16 @@ const NEON = (function () {
       if (a <= 0.002 || r <= 0) return;
       const gs = (opts.glowScale == null ? 1 : opts.glowScale);
       c.save();
-      c.globalCompositeOperation = opts.composite || 'lighter';
+      c.globalCompositeOperation = opts.composite || 'source-over';
       c.fillStyle = col.glow;
-      c.globalAlpha = a * 0.18;
-      c.beginPath(); c.arc(x, y, r * 3.1 * gs, 0, Math.PI * 2); c.fill();
-      c.globalAlpha = a * 0.40;
-      c.beginPath(); c.arc(x, y, r * 1.7 * gs, 0, Math.PI * 2); c.fill();
-      c.globalAlpha = a * 0.85;
+      c.globalAlpha = a * 0.08;
+      c.beginPath(); c.arc(x, y, r * 2.6 * gs, 0, Math.PI * 2); c.fill();
+      c.globalAlpha = a * 0.22;
+      c.beginPath(); c.arc(x, y, r * 1.55 * gs, 0, Math.PI * 2); c.fill();
+      c.globalAlpha = a * 0.72;
       c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
       c.fillStyle = col.core;
-      c.globalAlpha = a;
+      c.globalAlpha = a * 0.90;
       c.beginPath(); c.arc(x, y, Math.max(0.4, r * 0.45), 0, Math.PI * 2); c.fill();
       c.restore();
     },
@@ -684,13 +686,13 @@ const NEON = (function () {
       c.font = (opts.weight || 'bold') + ' ' + size + 'px ' + fam;
       c.textAlign = opts.align || 'left';
       c.textBaseline = opts.baseline || 'alphabetic';
-      c.globalCompositeOperation = opts.composite || 'lighter';
+      c.globalCompositeOperation = opts.composite || 'source-over';
       c.shadowColor = col.glow;
-      c.shadowBlur = size * 0.75 * (opts.glowScale == null ? 1 : opts.glowScale);
+      c.shadowBlur = size * 0.36 * (opts.glowScale == null ? 1 : opts.glowScale);
       c.fillStyle = col.glow;
       c.globalAlpha = a * 0.85;
       c.fillText(str, x, y);
-      c.shadowBlur = size * 0.3;
+      c.shadowBlur = size * 0.12;
       c.fillStyle = col.core;
       c.globalAlpha = a;
       c.fillText(str, x, y);

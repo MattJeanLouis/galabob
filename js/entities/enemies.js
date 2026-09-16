@@ -1456,7 +1456,11 @@ function detectEnemyCollisions() {
 /* Tampons réutilisés (jamais réalloués) */
 const _sbuf = [];
 const _unit = [];
-const _o = { alpha: 1, glowScale: 1, fill: false, fillAlpha: 0.28, dash: null, dashOffset: 0, passes: undefined };
+const _o = {
+  alpha: 1, glowScale: 1, fill: false, fillAlpha: 0.28,
+  dash: null, dashOffset: 0, passes: undefined,
+  halo: undefined, composite: undefined
+};
 let _enemyContrastSprite = null;
 
 /** Masque doux réutilisé sous chaque menace. Il assombrit localement le décor
@@ -1487,6 +1491,8 @@ function opt(alpha, glowScale, fill, fillAlpha, passes) {
   _o.dash = null;
   _o.dashOffset = 0;
   _o.passes = passes;
+  _o.halo = undefined;
+  _o.composite = undefined;
   return _o;
 }
 
@@ -1542,7 +1548,7 @@ const SHAPE_NORMAL_BODY = [
   -0.20,  0.16
 ];
 
-/* CANONNIER — violet. Coque large, deux canons, épaulements. */
+/* CANONNIER — rose chaud. Coque large, deux canons, épaulements. */
 const SHAPE_SHOOTER_BODY = [
   -0.34, -0.24,
    0.34, -0.24,
@@ -1873,6 +1879,21 @@ function drawEnemyShip(c, tr, e, t) {
 
   drawEnemySilhouette(c, e.type, cx, cy, s, cos, sin, key, w, 1, gs, t, e.phase);
 
+  // Signature universelle HOSTILE : œil rouge et deux crochets orientés vers
+  // le joueur. Les couleurs secondaires peuvent varier par classe, mais cette
+  // marque reste identique sur toute menace, astéroïdes compris.
+  eDot(c, cx, cy, s, cos, sin, 0, 0.03, Math.max(1.8, s * 0.075),
+       'bullet.enemy', opt(0.82, 0.82));
+  for (let side = -1; side <= 1; side += 2) {
+    _unit.length = 6;
+    _unit[0] = side * 0.56; _unit[1] = -0.42;
+    _unit[2] = side * 0.72; _unit[3] = -0.22;
+    _unit[4] = side * 0.59; _unit[5] = -0.05;
+    const hostileMark = opt(0.46 + chargeK * 0.28, 0.72, false, 0, 2);
+    hostileMark.halo = false;
+    ePoly(c, _unit, cx, cy, s, cos, sin, 'bullet.enemy', w * 0.64, hostileMark);
+  }
+
   // Flash blanc d'impact + étincelle orientée sur le point de contact.
   if (flash > 0) {
     // Halo court : un flash trop diffus efface la silhouette et le joueur perd
@@ -1968,6 +1989,25 @@ window.ENEMY_TYPES = ENEMY_TYPES;
 window.createFormation = createFormation;
 window.updateEnemies = updateEnemies;
 window.drawEnemies = drawEnemies;
+
+/** Dessine la silhouette ennemie ORIGINALE dans un canvas arbitraire.
+ *  La poursuite 3D s'en sert comme texture de billboard : aucune seconde
+ *  interprétation graphique des ennemis n'est maintenue ailleurs. */
+window.drawEnemyBillboard = function drawEnemyBillboard(c, type, width, height, time, phase) {
+  if (!c) return false;
+  const size = Math.min(width || 192, height || 192) * 0.72;
+  const e = {
+    x: ((width || 192) - size) / 2,
+    y: ((height || 192) - size) / 2,
+    width: size, height: size,
+    type: ENEMY_TYPES[type] ? type : 'normal',
+    phase: phase || 0, faceAngle: 0,
+    hitFlash: 0, diveState: 'none', charge: 0, muzzle: 0,
+    hasEntered: true, isHazard: false, maxHp: 1, hp: 1
+  };
+  drawEnemyShip(c, null, e, time || 0);
+  return true;
+};
 
 /** Convoyeur doré : traverse rapidement le haut de l'écran et ne tire jamais. */
 window.spawnBonusEnemy = function spawnBonusEnemy() {

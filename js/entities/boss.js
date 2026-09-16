@@ -3316,12 +3316,54 @@ const BOSS = (function () {
    *  21. RENDU
    * ======================================================================== */
 
+  function rayon3D() {
+    const m = S.memo || {};
+    if (S.index === RUCHE) return Math.max(36, (m.larg || 220) * 0.30);
+    if (S.index === PRISME) return Math.max(28, m.rNoyau || 46);
+    if (S.index === SERPENT) {
+      const tete = part('tete');
+      return Math.max(28, tete ? tete.r : 48 * ech());
+    }
+    return Math.max(32, m.r || 64 * ech());
+  }
+
+  /** Compose la coque 3D après le dessin vectoriel. Les points faibles 3D sont
+   *  alimentés par les vraies pièces de collision, donc aucun décalage visuel. */
+  function dessinerCoque3D(c) {
+    if (typeof window === 'undefined' || !window.BOSS3D ||
+        typeof window.BOSS3D.frame !== 'function') return false;
+    let frame = null;
+    try {
+      frame = window.BOSS3D.frame({
+        width: larg(), height: haut(), index: S.index,
+        x: S.x, y: S.y, radius: rayon3D(), angle: S.angle,
+        phase: S.phase, flash: S.flash, state: S.etat,
+        hp: fraction(),
+        death: S.etat === 'mort' ? S.tEtat / REGLAGES.agonie : 0,
+        pulse: S.memo && S.memo.pulse,
+        open: S.memo && (S.memo.ouv || S.memo.ouvert || S.memo.ouverture),
+        parts: S.parts
+      });
+    } catch (_) { frame = null; }
+    if (!frame) return false;
+    c.save();
+    c.globalCompositeOperation = 'source-over';
+    c.globalAlpha = frame.alpha;
+    c.imageSmoothingEnabled = true;
+    c.drawImage(frame.canvas, 0, 0, larg(), haut());
+    c.restore();
+    return true;
+  }
+
   function drawWorld(c) {
     if (!S.actif || typeof NEON === 'undefined') return;
     c = c || (typeof ctx !== 'undefined' ? ctx : null);
     if (!c) return;
     try {
       if (S.etat !== 'mort' || S.tEtat < REGLAGES.agonie * 0.78) {
+        // La coque volumique passe d'abord ; le trait vectoriel est ensuite
+        // réappliqué comme une encre technique (silhouette, cibles, danger).
+        dessinerCoque3D(c);
         if (S.def && typeof S.def.dessiner === 'function') S.def.dessiner(c);
       }
       dessinerDrones(c);

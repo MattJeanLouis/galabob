@@ -604,7 +604,7 @@ function drawStars() {
   }
 
   /* ---- 2. LES COUCHES D'ÉTOILES, de la plus lointaine à la plus proche ---- */
-  const styleAlpha = starStyle.alpha || 1;
+  const styleAlpha = (starStyle.alpha || 1) * 0.72;
   const smearAmount = starWarp - 1;
   for (let i = 0; i < starLayers.length; i++) {
     const L = starLayers[i];
@@ -662,7 +662,7 @@ function drawStars() {
   for (let i = 0; i < stars.length; i++) {
     const s = stars[i];
     const tw = 0.78 + 0.22 * Math.sin(s.twinkle);
-    const a = s.alpha * tw * skyDim;
+    const a = s.alpha * tw * skyDim * 0.64;
     NEON.dot(c, s.x, s.y, s.radius, s.col, { alpha: a });
     const len = s.speed * starWarp * tail * 3.2;
     if (len > 1.5) {

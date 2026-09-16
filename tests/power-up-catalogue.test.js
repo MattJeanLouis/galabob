@@ -12,6 +12,8 @@ test('le catalogue de contenu contient 16 bonus valides et distincts', async () 
     assert.equal(new Set(catalogue.map(item => item.key)).size, catalogue.length);
     assert.equal(new Set(catalogue.map(item => item.letter)).size, catalogue.length);
     assert.ok(catalogue.every(item => Object.isFrozen(item) && Object.isFrozen(item.shape)));
+    assert.ok(catalogue.every(item => /^reward\.(common|tech|rare|vital)$/.test(item.color)),
+      'tous les bonus doivent rester dans la famille chromatique des récompenses');
 
     const keys = new Set(catalogue.map(item => item.key));
     assert.ok(Object.values(aliases).every(target => keys.has(target)));

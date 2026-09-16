@@ -7,11 +7,9 @@
  *    1. DIX THÈMES  — nébuleuse, teinte/densité des étoiles, corps céleste
  *       dominant et SIGNATURE (brume, poussière, cristaux, braises, neige…).
  *       Ils doivent être reconnaissables au premier coup d'œil.
- *    2. DES PLANÈTES EN NÉON VECTORIEL — jamais de sphère texturée : un disque
- *       SOMBRE, un ARC LUMINEUX sur le terminateur, un fil de fer de latitudes
- *       à peine visible, des anneaux en ellipses lumineuses, des lunes en
- *       orbite lente. Elles vivent sur le plan le plus lointain et dérivent à
- *       peine : c'est cette lenteur qui donne l'échelle.
+ *    2. DES MONDES HYBRIDES — une couche Three.js donne volume, matière,
+ *       atmosphère et anneaux aux corps majeurs. Leur version vectorielle 2D
+ *       reste le repli instantané si WebGL 2 manque ou perd son contexte.
  *    3. CINQ ÉVÉNEMENTS ALÉATOIRES — comète, pluie de météores, éclipse,
  *       tempête magnétique, aurore. De loin en loin, jamais prévisibles.
  *    4. UN FOND QUI RÉAGIT — BACKDROP.pulse() aux explosions,
@@ -1940,7 +1938,7 @@ const BACKDROP = (function () {
 
     const w = S.w, h = S.h;
     const skyDim = (1 - S.dim * 0.72);
-    const nebA = skyDim * (1 - S.danger * 0.45) * (1 + S.pulseE * 0.18);
+    const nebA = skyDim * 0.70 * (1 - S.danger * 0.45) * (1 + S.pulseE * 0.12);
 
     c.save();
     c.globalCompositeOperation = 'lighter';
@@ -1991,7 +1989,7 @@ const BACKDROP = (function () {
     const b = S.theme.body;
     const col = tri(b.glow2 || b.glow, b.core);
     const dim = tri(b.glow, b.core);
-    const alpha = (assault ? 0.28 : 0.18) * skyDim * S.fade;
+    const alpha = (assault ? 0.18 : 0.12) * skyDim * S.fade;
     const drift = Math.sin(S.t * 0.10 + stage) * Math.min(w, h) * 0.008;
     const travel = S.travelY * 1.7;
 
@@ -2067,6 +2065,27 @@ const BACKDROP = (function () {
     const w = S.w, h = S.h;
     const b = S.theme.body;
     const skyDim = (1 - S.dim * 0.55);
+    let spaceFrame = null;
+    try {
+      if (typeof window !== 'undefined' && window.SPACE3D &&
+          typeof window.SPACE3D.frame === 'function') {
+        spaceFrame = window.SPACE3D.frame({
+          width: w,
+          height: h,
+          themeIndex: S.idx,
+          x: BODY_POS.x,
+          y: BODY_POS.y,
+          radius: BODY_POS.r,
+          intensity: S.intensity,
+          danger: S.danger
+        });
+      }
+    } catch (error) {
+      // Le décor 3D est une amélioration facultative : le sprite 2D courant
+      // reste visible si le contexte WebGL est perdu ou refuse une frame.
+      spaceFrame = null;
+    }
+    const threeAlpha = spaceFrame ? cl(spaceFrame.alpha, 0, 1) : 0;
 
     /* --- lunes DERRIÈRE le corps ------------------------------------------ */
     drawMoons(c, b, false, skyDim);
@@ -2078,19 +2097,31 @@ const BACKDROP = (function () {
      *     franche qui donne l'échelle — un disque lumineux, lui, ferait tache. */
     punchBody(c);
 
-    /* --- le corps céleste (pré-rendu) ------------------------------------- */
+    /* --- corps céleste : sprite 2D de secours + couche Three.js -----------
+     *  Pendant l'amorçage ou un changement de secteur, les deux versions se
+     *  croisent. Une panne WebGL remet immédiatement le sprite à 100 %. */
     c.save();
     c.globalCompositeOperation = 'lighter';
     if (S.bodyPrev && S.fade < 1) {
-      c.globalAlpha = (1 - S.fade) * skyDim;
+      c.globalAlpha = (1 - S.fade) * skyDim * 0.64;
       c.drawImage(S.bodyPrev.cv, BODY_POS.x - S.bodyPrev.pad, BODY_POS.y - S.bodyPrev.pad);
     }
     if (S.body) {
-      c.globalAlpha = (S.bodyPrev ? S.fade : 1) * skyDim;
+      const currentAlpha = (S.bodyPrev ? S.fade : 1) * (1 - threeAlpha);
+      c.globalAlpha = currentAlpha * skyDim * 0.64;
       c.drawImage(S.body.cv, BODY_POS.x - S.body.pad, BODY_POS.y - S.body.pad);
     }
     c.globalAlpha = 1;
     c.restore();
+
+    if (spaceFrame && threeAlpha > 0.002) {
+      c.save();
+      c.globalCompositeOperation = 'source-over';
+      c.globalAlpha = (S.bodyPrev ? S.fade : 1) * threeAlpha * skyDim * 0.88;
+      c.imageSmoothingEnabled = true;
+      c.drawImage(spaceFrame.canvas, 0, 0, w, h);
+      c.restore();
+    }
 
     /* --- faisceaux de pulsar (thème 10) : le seul élément animé du corps --- */
     if (b.beams && S.body && S.fade > 0.4) {

@@ -138,12 +138,12 @@ function drawHUD() {
 
   drawScoreBlock(c, pad, S);
   drawAssaultCreditBlock(c, pad, S);
-  drawStageBlock(c, S);
+  if (typeof gameState === 'undefined' || gameState !== 'transit') drawStageBlock(c, S);
   drawLivesBlock(c, W - pad, S);
   drawComboGauge(c, pad, H - pad, S);
   drawWeaponGauge(c, W - pad, H - pad, S);
   drawPlayerStatus(c, S);
-  drawAssaultManeuverZone(c, S);
+  drawManeuverZone(c, S);
   drawDangerFrame(c, S);
   drawHudAlert(c, S);
 
@@ -165,12 +165,9 @@ function drawAssaultCreditBlock(c, pad, S) {
   });
 }
 
-/** Limite de pilotage verticale du mode Assaut, discrète mais explicite. */
-function drawAssaultManeuverZone(c, S) {
-  const runtime = (typeof window !== 'undefined') ? window.GALABOB : null;
-  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
-  if (!mode || mode.id !== 'assault') return;
-
+/** Limite de pilotage verticale commune, discrète mais explicite. */
+function drawManeuverZone(c, S) {
+  if (typeof gameState !== 'undefined' && gameState === 'transit') return;
   const y = CANVAS_HEIGHT * 0.60;
   c.save();
   c.globalAlpha = 0.16;
@@ -600,8 +597,10 @@ function drawWeaponGauge(c, right, bottom, S) {
 function drawPlayerStatus(c, S) {
   if (typeof player === 'undefined' || !player) return;
 
-  const cx = player.x + player.width / 2;
-  const cy = player.y + player.height / 2;
+  const transitShip = (typeof gameState !== 'undefined' && gameState === 'transit')
+    ? window.TRANSIT?.debug?.().markers?.ship : null;
+  const cx = transitShip?.visible ? transitShip.x : player.x + player.width / 2;
+  const cy = transitShip?.visible ? transitShip.y : player.y + player.height / 2;
 
   /* ---- respawn : équerres qui convergent sur le vaisseau ----------------- */
   if (player.respawning && player.respawnTimer > 0) {

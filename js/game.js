@@ -11,13 +11,15 @@
  * ========================================================================== */
 
 // Variables d'état du jeu
-let gameState = "menu";     // "menu" | "playing" | "shop" | "gameover" | "settings"
+let gameState = "menu";     // "menu" | "playing" | "shop" | "transit" | "gameover" | "settings"
 let isPaused = false;       // pause demandée par le joueur (touche P)
 let autoPaused = false;     // pause automatique (onglet caché / perte de focus)
 let assaultShopFireArmed = true; // exige un relâchement après le dernier kill
 
 // Minuterie de fin de stage (en ms de temps de jeu, remplace un setTimeout)
 let pendingTransitionMs = -1;
+let sectorTransitPending = false;
+let sectorTransitPreview = false;
 let environmentalHazardTimer = 16000;
 
 /* -----------------------------------------------------------------------------
@@ -124,10 +126,13 @@ function saveHighScore() {
   const runtime = _runtime();
   const mode = runtime && runtime.modes ? runtime.modes.current() : null;
   if (runtime && runtime.profile && mode) {
+    // Le record du mode ne prend que le score de la partie en cours : la globale
+    // `highScore` est toutes-catégories et contaminait le mode sélectionné au
+    // menu avec le record du mode précédent.
     const saved = runtime.profile.mode(mode.id) || {};
     runtime.profile.updateMode(mode.id, {
       ...saved,
-      highScore: Math.max(Number(saved.highScore) || 0, Number(highScore) || 0)
+      highScore: Math.max(Number(saved.highScore) || 0, Number(score) || 0)
     });
   }
 }
@@ -227,7 +232,8 @@ function updatePlayerState(dtMs) {
  *  INITIALISATION / RÉINITIALISATION DE LA PARTIE
  * -------------------------------------------------------------------------- */
 function initGame() {
-  saveHighScore();
+  // Le score de la partie précédente a déjà été sauvegardé (game over ou
+  // retour au menu) ; le refaire ici l'écrirait dans le mode choisi ENTRE-TEMPS.
   assaultShopFireArmed = true;
 
   const runtime = _runtime();
@@ -274,6 +280,8 @@ function initGame() {
   if (typeof scorePopups !== 'undefined') scorePopups = [];
 
   pendingTransitionMs = -1;
+  sectorTransitPending = false;
+  sectorTransitPreview = false;
   environmentalHazardTimer = 16000;
   lastReinforcementAt = -1e9;
   isPaused = false;
@@ -283,6 +291,7 @@ function initGame() {
   // Le boss d'une partie précédente ne doit rien laisser derrière lui (il sème
   // ses propres projectiles dans enemyBullets et les balaie lui-même).
   if (typeof BOSS !== 'undefined') { try { BOSS.reset(); } catch (e) { /* ignoré */ } }
+  if (typeof TRANSIT !== 'undefined') { try { TRANSIT.reset(); } catch (e) { /* ignoré */ } }
   // Le ciel EMPRUNTE RENDER_CONFIG.aberration pendant une tempête magnétique :
   // sans ce reset, mourir en pleine tempête la laisserait montée dans le menu.
   if (typeof BACKDROP !== 'undefined') { try { BACKDROP.reset(); } catch (e) { /* ignoré */ } }
@@ -349,13 +358,33 @@ function update(deltaTime) {
       return;
     }
 
+    if (gameState === 'transit') {
+      if (deltaTime === 0) return;
+      if (typeof TRANSIT === 'undefined') {
+        finishSectorTransit();
+        return;
+      }
+      updatePlayerState(deltaTime);
+      TRANSIT.update(deltaTime);
+      _modeCall('updateTransit', deltaTime);
+      // Même pipeline d'effets que les stages 2D : les ramassages, explosions,
+      // débris et scores ne changent pas de langage pendant la poursuite.
+      if (typeof updatePowerUpFeedback === 'function') updatePowerUpFeedback(deltaTime);
+      updateExplosions(deltaTime);
+      if (typeof updateDebris === 'function') updateDebris(deltaTime);
+      if (typeof updateScorePopups === 'function') updateScorePopups(deltaTime);
+      _enforceEntityBudgets();
+      if (TRANSIT.isComplete()) finishSectorTransit();
+      return;
+    }
+
     // Minuterie de fin de stage (remplace l'ancien setTimeout)
     if (pendingTransitionMs >= 0) {
       pendingTransitionMs -= deltaTime;
       if (pendingTransitionMs <= 0) {
         pendingTransitionMs = -1;
         try {
-          stageSystem.startTransition();
+          beginInterstageFlow();
         } catch (e) {
           console.error("Échec du démarrage de la transition, passage forcé au stage suivant", e);
           try { stageSystem.forceNextStage(); } catch (e2) { softResetStage(); }
@@ -667,6 +696,29 @@ function damagePlayer(source) {
   return true;
 }
 
+/* -----------------------------------------------------------------------------
+ *  RETOUR AU MENU (Échap, bouton QUITTER, MENU PRINCIPAL)
+ *  Sans cette remise à zéro, la minuterie d'inter-stage continuait de courir
+ *  sous le menu et relançait la partie toute seule ; le boss, la poursuite et
+ *  le ciel du secteur restaient aussi actifs derrière l'écran-titre.
+ * -------------------------------------------------------------------------- */
+function returnToMenu() {
+  if (gameState === 'playing' || gameState === 'transit' || gameState === 'shop') saveHighScore();
+  score = 0;
+  gameState = "menu";
+  isPaused = false;
+  autoPaused = false;
+  pendingTransitionMs = -1;
+  sectorTransitPending = false;
+  sectorTransitPreview = false;
+  stageSystem.transitionActive = false;
+  JUICE.reset();
+  if (typeof BOSS !== 'undefined') { try { BOSS.reset(); } catch (e) { /* ignoré */ } }
+  if (typeof TRANSIT !== 'undefined') { try { TRANSIT.reset(); } catch (e) { /* ignoré */ } }
+  if (typeof BACKDROP !== 'undefined') { try { BACKDROP.reset(); } catch (e) { /* ignoré */ } }
+  if (typeof clearEffects === 'function') { try { clearEffects(); } catch (e) { /* ignoré */ } }
+}
+
 function triggerGameOver() {
   gameState = "gameover";
   isPaused = false;
@@ -804,6 +856,7 @@ function handleStageCompletion() {
     });
     const runtime = _runtime();
     const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+    sectorTransitPending = (stageSystem.currentStage % 5) === 0;
     if (runtime && runtime.profile && mode) {
       const saved = runtime.profile.mode(mode.id) || {};
       runtime.profile.updateMode(mode.id, {
@@ -957,7 +1010,52 @@ function continueAfterAssaultShop() {
   if (typeof mode.closeShop === 'function') mode.closeShop();
   gameState = 'playing';
   isPaused = false;
-  stageSystem.startTransition();
+  beginInterstageFlow();
+}
+
+/** Les blocs de cinq stages se terminent par une traversée pilotable. */
+function beginInterstageFlow() {
+  if (!sectorTransitPending) {
+    stageSystem.startTransition();
+    return;
+  }
+  sectorTransitPending = false;
+  sectorTransitPreview = false;
+  const runtime = _runtime();
+  const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+  const next = stageSystem.nextStageInfo();
+  playerBullets.length = 0;
+  enemyBullets.length = 0;
+  if (typeof playerSpecialShots !== 'undefined') playerSpecialShots.length = 0;
+  if (typeof TRANSIT === 'undefined' || !TRANSIT.start({
+    stage: stageSystem.currentStage,
+    nextStage: next.stage,
+    loop: stageSystem.loopCount,
+    mode: mode ? mode.id : 'arcade',
+    shipId: player.shipId
+  })) {
+    stageSystem.startTransition();
+    return;
+  }
+  gameState = 'transit';
+  isPaused = false;
+  JUICE.preset('stageStart');
+}
+
+function finishSectorTransit() {
+  try { if (typeof TRANSIT !== 'undefined') TRANSIT.reset(); } catch (_) { /* ignoré */ }
+  gameState = 'playing';
+  isPaused = false;
+  if (sectorTransitPreview) {
+    sectorTransitPreview = false;
+    return;
+  }
+  try {
+    stageSystem.goToNextStage();
+  } catch (error) {
+    console.error('Fin du transit intersectoriel :', error);
+    stageSystem.forceNextStage();
+  }
 }
 
 /** Dernier recours si le système de stages part en vrille : on repart proprement
@@ -970,6 +1068,9 @@ function softResetStage() {
     // BOSS.reset() purge aussi les balles qu'il avait semées dans enemyBullets.
     if (typeof BOSS !== 'undefined') { try { BOSS.reset(); } catch (e) { /* ignoré */ } }
     pendingTransitionMs = -1;
+    sectorTransitPending = false;
+    sectorTransitPreview = false;
+    if (typeof TRANSIT !== 'undefined') { try { TRANSIT.reset(); } catch (_) { /* ignoré */ } }
     stageSystem.transitionActive = false;
     isPaused = false;
     stageSystem.resetStageStats();
@@ -985,7 +1086,7 @@ function softResetStage() {
  *  CYCLE DE VIE — appelé par main.js (visibilitychange / blur / focus)
  * -------------------------------------------------------------------------- */
 function pauseForVisibility() {
-  if ((gameState === 'playing' || gameState === 'shop') && !isPaused) {
+  if ((gameState === 'playing' || gameState === 'shop' || gameState === 'transit') && !isPaused) {
     isPaused = true;
     autoPaused = true;
   }
@@ -1049,6 +1150,28 @@ function drawScene() {
     } catch (e) {
       console.error("Erreur lors du rendu de la transition :", e);
     }
+    return;
+  }
+
+  if (gameState === 'transit') {
+    try { if (typeof TRANSIT !== 'undefined') TRANSIT.draw(ctx); }
+    catch (e) { console.error('Erreur draw transit :', e); }
+    try { if (typeof drawPowerUpFeedback === 'function') drawPowerUpFeedback(); } catch (e) { console.error('Erreur power-ups transit :', e); }
+    try { drawExplosions(); } catch (e) { console.error('Erreur explosions transit :', e); }
+    if (typeof drawDebris === 'function') try { drawDebris(); } catch (e) { /* décoratif */ }
+    if (typeof drawScorePopups === 'function') try { drawScorePopups(); } catch (e) { /* décoratif */ }
+
+    // Score, vies, combo, bouclier, arme et munitions : le HUD habituel reste
+    // la source de vérité, fixé hors du screenshake comme dans les stages 2D.
+    const transitCamera = ctx.getTransform ? ctx.getTransform() : null;
+    ctx.save();
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    try { drawHUD(); } catch (e) { console.error('Erreur HUD transit :', e); }
+    if (isPaused) {
+      try { drawPauseMenu(); } catch (e) { /* menu facultatif */ }
+    }
+    ctx.restore();
+    if (transitCamera && ctx.setTransform) ctx.setTransform(transitCamera);
     return;
   }
 
@@ -1156,4 +1279,20 @@ window.gameEvent = gameEvent;
 window.getComboMultiplier = getComboMultiplier;
 window.getComboFraction = getComboFraction;
 window.saveHighScore = saveHighScore;
+window.returnToMenu = returnToMenu;
 window.continueAfterAssaultShop = continueAfterAssaultShop;
+/** Aperçu développeur sans modifier le stage courant à l'arrivée. */
+window.previewSectorTransit = function () {
+  if (gameState === 'menu' || gameState === 'gameover') initGame();
+  if (typeof TRANSIT === 'undefined') return false;
+  sectorTransitPreview = true;
+  gameState = 'transit';
+  isPaused = false;
+  return TRANSIT.start({
+    stage: 5,
+    nextStage: 6,
+    loop: stageSystem.loopCount,
+    mode: (_runtime()?.modes?.current()?.id) || 'arcade',
+    shipId: player.shipId
+  });
+};

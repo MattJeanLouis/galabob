@@ -199,8 +199,12 @@ function init() {
 
   installLifecycleHandlers();
 
-  // L'audio démarre en tâche de fond, APRÈS le premier rendu.
-  requestAnimationFrame(function () { setTimeout(bootAudio, 0); });
+  // Le manifeste audio est non critique : on le laisse aux temps morts pour
+  // ne pas concurrencer l'allocation des buffers et la première compilation 3D.
+  requestAnimationFrame(function () {
+    if (typeof requestIdleCallback === 'function') requestIdleCallback(bootAudio, { timeout: 1800 });
+    else setTimeout(bootAudio, 600);
+  });
 
   // Démarrage INSTANTANÉ de la boucle.
   requestAnimationFrame(gameLoop);

@@ -183,17 +183,17 @@ document.addEventListener('keydown', function (e) {
   }
 
   if (e.key === 'p' || e.key === 'P') {
-    if (gameState === "playing") {
+    if (gameState === "playing" || gameState === "transit") {
       isPaused = !isPaused;
       _uiClick(isPaused ? 'pause' : 'resume');
     }
   }
 
   if (e.key === 'Escape') {
-    if (gameState === "playing" || gameState === "gameover") {
+    if (gameState === "playing" || gameState === "transit" || gameState === "gameover") {
       _uiClick('quit');
-      gameState = "menu";
-      isPaused = false;
+      if (typeof returnToMenu === 'function') returnToMenu();
+      else { gameState = "menu"; isPaused = false; }
     } else if (gameState === "settings") {
       _uiClick('back');
       gameState = "menu";
@@ -208,18 +208,26 @@ document.addEventListener('keydown', function (e) {
 
   // Sélection rapide depuis le menu. Ces raccourcis correspondent aux boutons
   // visibles et ne doivent pas déclencher leur ancienne fonction audio.
-  if ((e.key === 'm' || e.key === 'M') && gameState === "menu") {
+  if ((e.key === 'm' || e.key === 'M') && gameState === "menu" && !e.repeat) {
     if (window.GALABOB && typeof window.GALABOB.selectNextMode === 'function') {
       window.GALABOB.selectNextMode();
       _uiClick('mode');
     }
   }
 
-  if ((e.key === 'v' || e.key === 'V') && gameState === "menu") {
+  if ((e.key === 'v' || e.key === 'V') && gameState === "menu" && !e.repeat) {
     if (window.GALABOB && typeof window.GALABOB.selectNextShip === 'function') {
       window.GALABOB.selectNextShip();
       _uiClick('ship');
     }
+  }
+
+  // Raccourci de développement : permet de juger la mission 3D sans jouer
+  // cinq stages complets. Il reste volontairement discret dans le menu.
+  if ((e.key === 't' || e.key === 'T') && gameState === "menu" && !e.repeat &&
+      typeof window.previewSectorTransit === 'function') {
+    _uiClick('transit-preview');
+    window.previewSectorTransit();
   }
 
   // Touche F3 pour afficher/masquer les stats

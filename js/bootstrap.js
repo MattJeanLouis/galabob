@@ -29,6 +29,9 @@ let browserStorage = null;
 try { browserStorage = window.localStorage; } catch { /* stockage indisponible */ }
 const profile = new ProfileStore(browserStorage);
 profile.load();
+if (modes.list().some((mode) => mode.id === profile.data.selectedMode)) {
+  modes.activate(profile.data.selectedMode);
+}
 
 const ships = new ShipRegistry();
 ships.register(CLASSIC_SHIP);
@@ -105,7 +108,7 @@ const runtime = {
     return this.stageSeed;
   },
   selectNextShip(direction = 1) {
-    const available = ships.list().filter((ship) => profile.data.unlockedShips.includes(ship.id));
+    const available = ships.list().filter((ship) => profile.data.unlocks.ships.includes(ship.id));
     if (!available.length) return null;
     const current = available.findIndex((ship) => ship.id === profile.data.selectedShip);
     const next = (Math.max(0, current) + (direction < 0 ? -1 : 1) + available.length) % available.length;
@@ -116,7 +119,13 @@ const runtime = {
     const available = modes.list();
     const current = available.findIndex((mode) => mode.id === modes.current()?.id);
     const next = (Math.max(0, current) + (direction < 0 ? -1 : 1) + available.length) % available.length;
-    return modes.activate(available[next].id);
+    return this.selectMode(available[next].id);
+  },
+  selectMode(id) {
+    const selected = modes.activate(id);
+    profile.data.selectedMode = id;
+    profile.save();
+    return selected;
   },
   combo: new ComboTracker({
     windowMs: tempo.COMBO_WINDOW_MS,

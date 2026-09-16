@@ -8,9 +8,18 @@
     "check:syntax": "node scripts/check-syntax.mjs",
     "test": "node --test",
     "check": "npm run check:syntax && npm test",
-    "serve": "python3 -m http.server 8000"
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build && node scripts/verify-build.mjs",
+    "preview": "vite preview --host 0.0.0.0",
+    "serve": "vite --host 0.0.0.0"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "three": "^0.186.0"
+  },
+  "devDependencies": {
+    "vite": "^8.3.0"
   }
 }

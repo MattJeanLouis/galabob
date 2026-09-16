@@ -81,6 +81,11 @@
   <script src="js/utils.js"></script>
   <script src="js/render/neon.js"></script>
   <script src="js/render/backdrop.js"></script>
+  <!-- Couche 2,5D facultative : si WebGL 2 manque, backdrop.js garde ses corps 2D. -->
+  <script type="module" src="js/render/space3d.js"></script>
+  <!-- Coques 3D des boss ; hitbox, points faibles et attaques restent pilotés par boss.js. -->
+  <script type="module" src="js/render/boss3d.js"></script>
+  <script type="module" src="js/render/transit3d.js"></script>
   <script src="js/audio.js"></script>
   <script src="js/audio/sfx.js"></script>
   <script src="js/core/input.js"></script>
@@ -89,6 +94,7 @@
   <script src="js/core/stages.js"></script>
   <script src="js/entities/stars.js"></script>
   <script src="js/entities/player.js"></script>
+  <script src="js/modes/transit.js"></script>
   <script src="js/entities/enemies.js"></script>
   <script src="js/entities/projectiles.js"></script>
   <script src="js/entities/effects.js"></script>

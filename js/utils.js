@@ -381,7 +381,12 @@ function resizeCanvas() {
 
   const cssW = Math.max(1, Math.floor(window.innerWidth));
   const cssH = Math.max(1, Math.floor(window.innerHeight));
-  const ratio = Math.min(window.devicePixelRatio || 1, RENDER_CONFIG.maxPixelRatio || 2);
+  const requestedRatio = Math.min(window.devicePixelRatio || 1, RENDER_CONFIG.maxPixelRatio || 2);
+  const pixelBudget = Math.max(500000, Number(RENDER_CONFIG.maxCanvasPixels) || 1800000);
+  // Le ratio peut descendre sous 1 sur un écran 4K : mieux vaut un léger
+  // ré-échantillonnage stable qu'un canvas de 8 Mpx flouté six fois par frame.
+  const budgetRatio = Math.sqrt(pixelBudget / Math.max(1, cssW * cssH));
+  const ratio = Math.max(0.72, Math.min(requestedRatio, budgetRatio));
 
   const key = cssW + 'x' + cssH + '@' + ratio;
   const sizeChanged = (key !== _lastResizeKey);

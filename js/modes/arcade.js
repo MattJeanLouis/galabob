@@ -13,7 +13,11 @@ export function createArcadeMode(progression = null) {
     hasScore: true,
     hasEndlessLoops: true,
     progression,
-    startRun() {},
+    startRun() {
+      if (typeof window.hudAlert === 'function') {
+        window.hudAlert('CODE VISUEL', 'CYAN : VOUS · ROUGE : DANGER · VERT : BONUS', '#22f5a7', 2600);
+      }
+    },
     update() {},
     completeStage() {},
     endRun() {}

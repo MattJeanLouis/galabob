@@ -24,9 +24,10 @@
  *     cette table. Ajouter un 14ᵉ type = ajouter une ligne.
  *
  *  3. LISIBILITÉ EN PLEIN COMBAT (le point critique à 13 types)
- *     Chaque bonus porte TROIS marqueurs redondants : une COULEUR unique, une
- *     FORME VECTORIELLE unique (hexagone, losange, pentagone, écusson,
- *     sablier, fer à cheval, étoile 4/8, croix, soleil…) et une LETTRE unique.
+ *     Chaque bonus porte TROIS marqueurs redondants : une COURONNE VERTE
+ *     commune au butin, une FORME VECTORIELLE unique (hexagone, losange,
+ *     pentagone, écusson, sablier, fer à cheval, étoile 4/8, croix, soleil…)
+ *     et une LETTRE unique.
  *     Même à moitié caché par une explosion, il reste identifiable.
  *
  *  4. DROP PONDÉRÉ
@@ -71,7 +72,7 @@ const POWERUP_DROP_CHANCE = 0.15;
  *  label    : libellé affiché au ramassage
  *  letter   : glyphe central, UNIQUE
  *  slot     : 'weapon' | 'shield' | 'mod' | 'instant'
- *  color    : clé PALETTE ou couleur CSS (PALETTE.get sait résoudre les deux)
+ *  color    : famille de récompense PALETTE (vert commun/tech/vital ou or rare)
  *  shape    : forme vectorielle de la cage (voir _powerUpShapePoints)
  *  weight   : poids de tirage (0 = jamais tiré)
  *  duration : ms (armes et modificateurs) — 0 pour les instantanés
@@ -299,25 +300,24 @@ function updatePowerUps(deltaTime) {
       }
     }
 
-    updateBombWaves(deltaTime, dt);
-
-    // --- effets de ramassage ------------------------------------------------
-    for (let i = powerUpPickups.length - 1; i >= 0; i--) {
-      const fx = powerUpPickups[i];
-      fx.life -= deltaTime;
-      fx.y -= 42 * dt;
-      if (fx.life <= 0) powerUpPickups.splice(i, 1);
-    }
-
-    // --- étincelles du multiplicateur --------------------------------------
-    for (let i = multiplierSparks.length - 1; i >= 0; i--) {
-      const s = multiplierSparks[i];
-      s.life -= deltaTime;
-      s.y -= 58 * dt;
-      if (s.life <= 0) multiplierSparks.splice(i, 1);
-    }
+    updatePowerUpFeedback(deltaTime);
   } catch (e) {
     console.error("Erreur dans updatePowerUps:", e);
+  }
+}
+
+/** Animation des retours de bonus, indépendante des objets 2D en chute. */
+function updatePowerUpFeedback(deltaTime) {
+  const dt = (Number(deltaTime) || 0) / 1000;
+  if (!(dt > 0)) return;
+  updateBombWaves(deltaTime, dt);
+  for (let i = powerUpPickups.length - 1; i >= 0; i--) {
+    const fx = powerUpPickups[i]; fx.life -= deltaTime; fx.y -= 42 * dt;
+    if (fx.life <= 0) powerUpPickups.splice(i, 1);
+  }
+  for (let i = multiplierSparks.length - 1; i >= 0; i--) {
+    const s = multiplierSparks[i]; s.life -= deltaTime; s.y -= 58 * dt;
+    if (s.life <= 0) multiplierSparks.splice(i, 1);
   }
 }
 
@@ -666,7 +666,21 @@ function drawPowerUps() {
 
     // Halo de fond, non tourné : l'objet doit se voir de loin, et PULSER.
     const halo = 0.26 + 0.14 * Math.sin(t * 5.1 + (p.phase || 0) * 1.7);
-    NEON.dot(c, 0, 0, r * 0.46 * pulse, col, { alpha: halo, glowScale: 2.0 });
+    NEON.dot(c, 0, 0, r * 0.42 * pulse, 'reward.common', { alpha: halo, glowScale: 1.25 });
+
+    // Signature universelle de BUTIN : double cercle vert continu et quatre
+    // encoches. La couleur interne continue d'indiquer la famille du bonus,
+    // mais cette couronne dit d'abord « objet bénéfique » — même en vision
+    // périphérique ou sans perception rouge/vert fiable.
+    NEON.ring(c, 0, 0, r * 1.44, 1.5, 'reward.common', {
+      alpha: 0.54 + 0.12 * Math.sin(t * 5.1), passes: 2, halo: false
+    });
+    for (let mark = 0; mark < 4; mark++) {
+      const ma = mark * Math.PI / 2;
+      NEON.line(c, Math.cos(ma) * r * 1.58, Math.sin(ma) * r * 1.58,
+                   Math.cos(ma) * r * 1.86, Math.sin(ma) * r * 1.86,
+                'reward.common', 1.6, { alpha: 0.68, passes: 2, halo: false });
+    }
 
     // --- la CAGE : forme vectorielle propre au type ------------------------
     c.save();
@@ -674,7 +688,7 @@ function drawPowerUps() {
     c.scale(pulse, pulse);
 
     NEON.shape(c, _powerUpShapePoints(def, r), col, 1.7, {
-      alpha: alpha, fill: true, fillAlpha: 0.16, glowScale: 1.15
+      alpha: alpha, fill: true, fillAlpha: 0.11, glowScale: 0.9, passes: 3
     });
 
     // Rayons du soleil (bombe) : la seule forme qui déborde de sa cage.
@@ -697,10 +711,11 @@ function drawPowerUps() {
     }
     c.restore();
 
-    // Anneau contre-rotatif des bonus RARES : on doit se jeter dessus.
+    // Anneau contre-rotatif OR des bonus rares : la rareté reste un second
+    // niveau d'information, sous la signature verte commune à tout le butin.
     if (def.rare) {
-      NEON.ring(c, 0, 0, r * 1.62 + 1.5 * Math.sin(t * 4.3), 1.1, col, {
-        alpha: alpha * 0.5, dash: [4, 7], dashOffset: t * 34, passes: 2
+      NEON.ring(c, 0, 0, r * 1.72 + 1.5 * Math.sin(t * 4.3), 1.1, 'reward.rare', {
+        alpha: alpha * 0.42, dash: [4, 7], dashOffset: t * 34, passes: 2, halo: false
       });
     }
 
@@ -718,6 +733,15 @@ function drawPowerUps() {
     c.restore();
   }
 
+  drawBombWaves(c);
+  drawSlowMotionOverlay(c);
+  drawMultiplierSparks(c);
+  drawPowerUpPickups(c);
+}
+
+/** Calque partagé utilisable quand le monde 2D n'est pas affiché. */
+function drawPowerUpFeedback() {
+  const c = ctx;
   drawBombWaves(c);
   drawSlowMotionOverlay(c);
   drawMultiplierSparks(c);
@@ -826,8 +850,10 @@ function drawSlowMotionOverlay(c) {
 
   // Champ autour du vaisseau : c'est LUI qui est resté à vitesse normale.
   if (typeof player !== 'undefined' && player) {
-    const cx = player.x + player.width / 2;
-    const cy = player.y + player.height / 2;
+    const transitShip = (typeof gameState !== 'undefined' && gameState === 'transit')
+      ? window.TRANSIT?.debug?.().markers?.ship : null;
+    const cx = transitShip?.visible ? transitShip.x : player.x + player.width / 2;
+    const cy = transitShip?.visible ? transitShip.y : player.y + player.height / 2;
     for (let i = 0; i < 2; i++) {
       const r = 60 + i * 34 + 7 * Math.sin(t * 2.2 - i);
       NEON.ring(c, cx, cy, r, 1.1, col, {
@@ -913,5 +939,29 @@ window.powerUpLabel = powerUpLabel;
 window.rollPowerUpType = rollPowerUpType;
 window.createPowerUp = createPowerUp;
 window.applyPowerUp = applyPowerUp;
+window.updatePowerUpFeedback = updatePowerUpFeedback;
+window.drawPowerUpFeedback = drawPowerUpFeedback;
 window.triggerPowerUpBomb = triggerPowerUpBomb;
 window.ensurePowerUpBridges = ensurePowerUpBridges;
+
+/** Version autonome du dessin original pour les billboards de la poursuite 3D. */
+window.drawPowerUpBillboard = function drawPowerUpBillboard(c, type, width, height, time) {
+  if (!c) return false;
+  const def = powerUpDef(type), col = PALETTE.get(def.color);
+  const cx = (width || 160) / 2, cy = (height || 160) / 2, r = Math.min(width || 160, height || 160) * 0.20;
+  NEON.dot(c, cx, cy, r * 0.42, 'reward.common', { alpha: 0.34, glowScale: 1.25 });
+  NEON.ring(c, cx, cy, r * 1.44, 2.2, 'reward.common', { alpha: 0.66, passes: 3, halo: false });
+  for (let mark = 0; mark < 4; mark++) {
+    const a = mark * Math.PI / 2;
+    NEON.line(c, cx + Math.cos(a) * r * 1.58, cy + Math.sin(a) * r * 1.58,
+      cx + Math.cos(a) * r * 1.86, cy + Math.sin(a) * r * 1.86,
+      'reward.common', 2, { alpha: 0.76, passes: 2, halo: false });
+  }
+  const points = _powerUpShapePoints(def, r).slice();
+  for (let i = 0; i < points.length; i += 2) { points[i] += cx; points[i + 1] += cy; }
+  NEON.shape(c, points, col, 2.4, { alpha: 1, fill: true, fillAlpha: 0.12, glowScale: 0.9, passes: 4 });
+  if (def.letter) NEON.text(c, def.letter, cx, cy + 1, col, {
+    size: Math.round(r * 1.15), align: 'center', baseline: 'middle', alpha: 1, glowScale: 0.8
+  });
+  return true;
+};

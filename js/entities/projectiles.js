@@ -239,24 +239,26 @@ function drawPlayerBullets() {
     if (tr) {
       const st = _trailStep();
       NEON.line(tr, cx, b.y + h, cx - (b.vx || 0) * st, b.y + h - (b.vy || 0) * st, key, 2.0, {
-        alpha: 0.46, passes: 2
+        alpha: 0.38, passes: 2, composite: 'lighter'
       });
     }
 
     // Sillage court dans la scène : c'est lui qui donne la LONGUEUR, la
     // lecture d'une lance et non d'une bille.
     NEON.line(c, cx - b.vx * 0.004, b.y + h * 0.8, cx - b.vx * 0.013, b.y + h + 13,
-              key, 1.5, { alpha: 0.34, passes: 3 });
+              key, 1.5, { alpha: 0.30, passes: 2, composite: 'lighter' });
 
     // Corps : capsule néon (halo coloré + noyau quasi blanc).
     NEON.beam(c, b.x - birth * 0.5, b.y, w + birth, h, key, {
       alpha: 1,
-      glowScale: 0.82 + birth * 0.5
+      glowScale: 0.72 + birth * 0.35,
+      composite: 'lighter',
+      passes: 3
     });
 
     // Épine blanche : le noyau net qui survit au bloom.
     NEON.line(c, cx, b.y + 2, cx, b.y + h - 2, 'playerCore', 0.8,
-              { alpha: 0.9, passes: 2 });
+              { alpha: 0.9, passes: 2, halo: false, composite: 'lighter' });
 
     // Éclat de naissance — discret : une salve 'spread' en fait naître sept
     // au même endroit, et le rendu est additif.
@@ -289,7 +291,7 @@ function drawEnemyBullets() {
     if (tr) {
       const st = _trailStep();
       NEON.line(tr, cx, cy, cx - (b.vx || 0) * st, cy - (b.vy || 0) * st, key, 2.2, {
-        alpha: 0.42, passes: 2
+        alpha: 0.34, passes: 2, composite: 'lighter'
       });
     }
 
@@ -299,17 +301,20 @@ function drawEnemyBullets() {
       cx + rx, cy,
       cx, cy - ry,
       cx - rx, cy
-    ], key, 1.8, { alpha: 1, fill: true, fillAlpha: 0.42, glowScale: 1.35 });
+    ], key, 1.8, { alpha: 1, fill: true, fillAlpha: 0.34, glowScale: 1.0,
+                   composite: 'lighter', passes: 3 });
 
     // Noyau blanc : c'est le point qui tue, il doit rester net dans le bloom.
-    NEON.dot(c, cx, cy, 1.6, 'bulletEnemy', { alpha: 1, glowScale: 0.9 });
+    NEON.dot(c, cx, cy, 1.6, 'bulletEnemy', {
+      alpha: 1, glowScale: 0.82, composite: 'lighter'
+    });
 
     // Anneau de menace, en rotation lente : lisible même sur fond chargé.
     NEON.ring(c, cx, cy, rx * 1.55, 1.0, key, {
       alpha: 0.30 + 0.14 * Math.sin(t * 7 + i),
       dash: [3, 4],
       dashOffset: t * 22,
-      passes: 2
+      passes: 2, halo: false, composite: 'lighter'
     });
   }
 }

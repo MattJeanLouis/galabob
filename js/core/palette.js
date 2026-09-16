@@ -2,8 +2,8 @@
  *  galabob — PALETTE  (source de vérité UNIQUE des couleurs)
  * -----------------------------------------------------------------------------
  *  Direction artistique : NÉON VECTORIEL (Geometry Wars / Tempest).
- *  Fond noir profond, dominantes CYAN (le joueur) / MAGENTA (la menace) /
- *  BLANC CHAUD (l'énergie).
+ *  Fond noir profond, trois familles sémantiques : CYAN (le joueur),
+ *  ROUGE/MAGENTA (la menace), VERT/OR (les récompenses).
  *
  *  Toute entité expose un TRIPLET cohérent :
  *    core   : couleur de NOYAU     — trait fin quasi blanc, l'âme du vecteur
@@ -123,42 +123,46 @@ const PALETTE = (function () {
 
     /* --- ennemis : la MENACE, du magenta au violet à l'ambre --- */
     enemyNormal:  T('#ffd9f6', '#ff2bd6', '#ff2bd6'),  // magenta franc
-    enemyShooter: T('#e8d9ff', '#9d5bff', '#9d5bff'),  // violet électrique
+    enemyShooter: T('#ffe0f0', '#ff3f8f', '#ff3f8f'),  // rose chaud, jamais bleu ami
     enemyFast:    T('#fff1d2', '#ffb03a', '#ffb03a'),  // ambre / blanc chaud
     enemyElite:   T('#ffffff', '#ff2b55', '#ff2b55'),  // rouge néon
     enemyArmored: T('#fff0d8', '#ff641f', '#ff8a38'),  // blindage orange incandescent
-    enemySniper:  T('#f8e8ff', '#d45bff', '#ed9dff'),  // éclat violet très pâle
+    enemySniper:  T('#fff0e8', '#ff5353', '#ff7a62'),  // rouge précis, immédiatement hostile
     enemyAsteroid:T('#fff0d8', '#b58a62', '#e0b27b'),  // roche chaude, distincte des tirs
     enemyDiving:  T('#ffffff', '#ff5ad0', '#ff2bd6'),  // teinte de plongée (télégraphie)
 
     /* --- projectiles joueur : famille cyan → blanc chaud --- */
     bulletPlayer: T('#ffffff', '#7df9ff', '#7df9ff'),
     bulletDouble: T('#ffffff', '#4dd2ff', '#4dd2ff'),
-    bulletSpread: T('#fffdf2', '#ffd98a', '#ffd98a'),
+    bulletSpread: T('#ffffff', '#9afcff', '#9afcff'),
 
     /* --- projectiles ennemis : rouge de danger, lisibilité avant tout --- */
     bulletEnemy:        T('#ffe3e9', '#ff2b55', '#ff2b55'),
-    bulletEnemyShooter: T('#ffe0f2', '#ff3fa8', '#ff3fa8'),
+    bulletEnemyShooter: T('#ffe8ec', '#ff385f', '#ff385f'),
     bulletEnemyFast:    T('#fff0dd', '#ff7a2b', '#ff7a2b'),
     bulletEnemyArmored: T('#fff0dd', '#ff641f', '#ff641f'),
-    bulletEnemySniper:  T('#fff5ff', '#e58aff', '#e58aff'),
+    bulletEnemySniper:  T('#fff2e8', '#ff4b35', '#ff684f'),
 
-    /* --- power-ups : vert menthe / or, jamais confondables avec la menace --- */
-    powerupDouble: T('#ffffff', '#00ffc8', '#00ffc8'),
-    powerupSpread: T('#fffaf0', '#ffd166', '#ffd166'),
-    powerupLife:   T('#ffffff', '#ff4fa3', '#ff4fa3'),
-    // Les 10 types ajoutés par powerups.js : une couleur d'identité chacun,
-    // toutes distinctes entre elles ET des trois familles ci-dessus.
-    powerupLaser:     T('#ffe0fb', '#ff4df0', '#ff4df0'),
-    powerupMissiles:  T('#ffe9cf', '#ff9d3d', '#ff9d3d'),
-    powerupMitraille: T('#eaffd0', '#a6ff3d', '#a6ff3d'),
-    powerupOnde:      T('#dff1ff', '#4db8ff', '#4db8ff'),
-    powerupBouclier:  T('#ffffff', '#8affff', '#8affff'),
-    powerupRalenti:   T('#dfe3ff', '#6f7dff', '#6f7dff'),
-    powerupAimant:    T('#ffe1f2', '#ff6ec7', '#ff6ec7'),
-    powerupMultiplicateur: T('#fffce0', '#ffee55', '#ffee55'),
-    powerupSurcharge: T('#f4e3ff', '#c86bff', '#c86bff'),
-    powerupBombe:     T('#ffffff', '#ffffff', '#ffffff'),
+    /* --- récompenses : une seule famille vert → or -----------------------
+     *  Leur forme et leur lettre portent le type précis ; la couleur dit
+     *  d'abord « ramasse-moi », sans jamais reprendre le rouge des menaces. */
+    rewardCommon: T('#effff8', '#22f5a7', '#56ffc2'),
+    rewardTech:   T('#f7ffe7', '#a6f43d', '#c3ff68'),
+    rewardRare:   T('#fff9df', '#ffd166', '#ffe28f'),
+    rewardVital:  T('#f0fff0', '#5cff72', '#8aff99'),
+    powerupDouble: T('#effff8', '#22f5a7', '#56ffc2'),
+    powerupSpread: T('#fff9df', '#ffd166', '#ffe28f'),
+    powerupLife:   T('#f0fff0', '#5cff72', '#8aff99'),
+    powerupLaser:     T('#effff8', '#22f5a7', '#56ffc2'),
+    powerupMissiles:  T('#fff9df', '#ffd166', '#ffe28f'),
+    powerupMitraille: T('#f7ffe7', '#a6f43d', '#c3ff68'),
+    powerupOnde:      T('#effff8', '#22f5a7', '#56ffc2'),
+    powerupBouclier:  T('#effff8', '#22f5a7', '#56ffc2'),
+    powerupRalenti:   T('#f7ffe7', '#a6f43d', '#c3ff68'),
+    powerupAimant:    T('#f7ffe7', '#a6f43d', '#c3ff68'),
+    powerupMultiplicateur: T('#fff9df', '#ffd166', '#ffe28f'),
+    powerupSurcharge: T('#fff9df', '#ffd166', '#ffe28f'),
+    powerupBombe:     T('#fff9df', '#ffd166', '#ffe28f'),
 
     /* --- divers --- */
     debris:   T('#ffffff', '#9fe8ff', '#9fe8ff'),
@@ -229,6 +233,11 @@ const PALETTE = (function () {
   reg('enemy', entities.enemyNormal);
   reg('ram', entities.enemyElite);
 
+  reg('reward.common', entities.rewardCommon);
+  reg('reward.tech', entities.rewardTech);
+  reg('reward.rare', entities.rewardRare);
+  reg('reward.vital', entities.rewardVital);
+
   reg('bullet.player', entities.bulletPlayer);
   reg('bullet.player.normal', entities.bulletPlayer);
   reg('bullet.player.double', entities.bulletDouble);
@@ -266,15 +275,17 @@ const PALETTE = (function () {
   reg('powerup.wave', entities.powerupOnde);
 
   // Armes : hud.js et projectiles.js passent par PALETTE.weapon(nom).
-  reg('weapon.laser', entities.powerupLaser);
-  reg('weapon.missiles', entities.powerupMissiles);
-  reg('weapon.mitraille', entities.powerupMitraille);
-  reg('weapon.onde', entities.powerupOnde);
-  reg('bullet.player.mitraille', entities.powerupMitraille);
-  reg('bullet.player.surcharge', entities.powerupSurcharge);
-  reg('bullet.player.laser', entities.powerupLaser);
-  reg('bullet.player.missiles', entities.powerupMissiles);
-  reg('bullet.player.onde', entities.powerupOnde);
+  // Quelle que soit l'arme, un tir du joueur reste dans la famille cyan.
+  reg('weapon.laser', entities.bulletPlayer);
+  reg('weapon.missiles', entities.bulletDouble);
+  reg('weapon.mitraille', entities.bulletPlayer);
+  reg('weapon.onde', entities.bulletSpread);
+  reg('weapon.surcharge', entities.bulletDouble);
+  reg('bullet.player.mitraille', entities.bulletPlayer);
+  reg('bullet.player.surcharge', entities.bulletDouble);
+  reg('bullet.player.laser', entities.bulletPlayer);
+  reg('bullet.player.missiles', entities.bulletDouble);
+  reg('bullet.player.onde', entities.bulletSpread);
   reg('double', entities.powerupDouble);    // createPowerUp type
   reg('spread', entities.powerupSpread);
   reg('life', entities.powerupLife);

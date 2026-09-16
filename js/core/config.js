@@ -159,19 +159,25 @@ const RENDER_CONFIG = {
   // ~27 Mpx de remplissage. Le coût est donc proportionnel à la surface, et
   // c'est le seul levier qui compte vraiment. À 1.5, la surface tombe de 44 %.
   maxPixelRatio: 1.5,
+  // Budget physique global des buffers Canvas. Sur un grand écran/Retina,
+  // multiplier toute la surface par le DPR puis la parcourir six fois pour le
+  // bloom provoquait plusieurs minutes de démarrage poussif avant l'auto-baisse.
+  maxCanvasPixels: 1800000,
   bloom: true,          // activer le moteur de bloom néon
-  bloomIntensity: 1.0,  // 0 → 2
-  bloomBlurA: 5,        // rayon de flou du buffer 1/4 (en px de ce buffer)
-  bloomBlurB: 9,        // rayon de flou du buffer 1/8
-  bloomWeightA: 0.62,
-  bloomWeightB: 0.48,
-  aberration: 1.8,      // px CSS de décalage de l'aberration chromatique (0 = off)
+  // Le bloom est un accent, pas un voile global. Les valeurs précédentes
+  // additionnaient presque une seconde scène complète par-dessus la première.
+  bloomIntensity: 0.68, // 0 → 2
+  bloomBlurA: 4,        // halo proche : conserve les contours séparés
+  bloomBlurB: 7,        // halo lointain, volontairement beaucoup plus faible
+  bloomWeightA: 0.46,
+  bloomWeightB: 0.24,
+  aberration: 0.8,      // léger relief chromatique sans dédoubler les silhouettes
   trails: true,         // traînées de mouvement persistantes
   // Fraction conservée d'une frame à l'autre (à 60 fps).
   // L'ancien plafond dur de 0.75 est levé : la PURGE ROULANTE (ci-dessous)
   // casse l'arrondi 8 bits, donc les alphas faibles atteignent zéro au lieu
   // de geler. Mesuré : plancher 0/255 et traînée de 20 frames (contre 8).
-  trailFade: 0.95,
+  trailFade: 0.88,
   // Purge roulante : chaque frame, UNE bande du buffer subit cette atténuation
   // bien plus forte. Chaque pixel y passe tous les `trailPurgeBands` frames.
   // C'est ce qui garantit l'extinction totale ; le découpage en bandes évite
@@ -180,7 +186,7 @@ const RENDER_CONFIG = {
   trailPurgeBands: 10,
   vignette: 0.30,       // 0 → 1
   autoQuality: true,    // rétrograde automatiquement si le framerate s'effondre
-  quality: 3            // 3 = complet, 2 = sans aberration, 1 = bloom simple, 0 = pas de bloom
+  quality: 2            // 3 = ultra manuel, 2 = haute fluide, 1 = bloom simple, 0 = pas de bloom
 };
 
 /* -----------------------------------------------------------------------------

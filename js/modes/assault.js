@@ -204,7 +204,7 @@ export function createAssaultMode(progression) {
         window.BACKDROP.setTheme((state.stage * 3 + 4) % 10);
       }
       let briefing = 'LA LIGNE ENNEMIE DESCEND';
-      if (state.stage === 1) briefing = 'FLÈCHES OU ZQSD · MAINTENEZ ESPACE POUR TIRER';
+      if (state.stage === 1) briefing = 'CYAN VOUS · ROUGE DANGER · VERT BONUS';
       else if (state.stage === 3) briefing = 'NOUVELLE MENACE · SNIPERS LONGUE PORTÉE';
       else if (state.stage === 5) briefing = 'NOUVELLE MENACE · UNITÉS BLINDÉES';
       else if (state.stage % 10 === 0) briefing = 'SIGNATURE DE BOSS DÉTECTÉE';
@@ -224,6 +224,14 @@ export function createAssaultMode(progression) {
       }
       if (state.reloadRemaining <= 0) return;
       state.reloadRemaining = Math.max(0, state.reloadRemaining - elapsed);
+      if (state.reloadRemaining === 0) state.magazine = state.magazineMax;
+    },
+
+    // La poursuite possède ses propres cibles : on n'y fait pas apparaître le
+    // convoyeur 2D, mais le même chargeur continue de fonctionner sans reset.
+    updateTransit(deltaMs) {
+      if (state.reloadRemaining <= 0) return;
+      state.reloadRemaining = Math.max(0, state.reloadRemaining - Math.max(0, Number(deltaMs) || 0));
       if (state.reloadRemaining === 0) state.magazine = state.magazineMax;
     },
 

@@ -179,17 +179,17 @@ function fxBatchFlush(c, trailCtx, trailAlpha) {
     const b = fxBatchPool[i];
     const a = b.alpha;
     c.strokeStyle = b.glow;
-    c.globalAlpha = a * 0.14;
-    c.lineWidth = b.width * 5.0;
+    c.globalAlpha = a * 0.07;
+    c.lineWidth = b.width * 4.0;
     c.stroke(b.path);
-    c.globalAlpha = a * 0.34;
-    c.lineWidth = b.width * 2.4;
+    c.globalAlpha = a * 0.20;
+    c.lineWidth = b.width * 2.0;
     c.stroke(b.path);
-    c.globalAlpha = a * 0.90;
+    c.globalAlpha = a * 0.78;
     c.lineWidth = b.width * 1.05;
     c.stroke(b.path);
     c.strokeStyle = b.core;
-    c.globalAlpha = a;
+    c.globalAlpha = a * 0.90;
     c.lineWidth = Math.max(0.5, b.width * 0.45);
     c.stroke(b.path);
   }
