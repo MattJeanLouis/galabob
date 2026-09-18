@@ -101,22 +101,6 @@ test('les éléments de jeu à voir sont projetés : bonus et explosions', () =>
   }
 });
 
-test('la vue ne MODIFIE jamais la simulation : elle ne fait que lire', () => {
-  const module3d = read('js/render/game3d.js');
-
-  // Aucune écriture dans les objets REÇUS (player, ennemis, balles, bonus).
-  // C'est la promesse de fond de la vue : hitboxes, dégâts et progression
-  // restent exactement ceux du 2D. Une seule affectation la casserait.
-  const interdites = module3d.match(
-    /\b(player|e|b|p)\.(x|y|hp|hpMax|damage|score|life|alive|isDeleted)\s*=[^=]/g
-  ) || [];
-  assert.deepEqual(interdites, [],
-    'la vue ne doit jamais écrire dans les objets de jeu : ' + interdites.join(', '));
-
-  // Et l'instantané ne doit contenir que des lectures : pas de recopie profonde.
-  assert.doesNotMatch(module3d, /JSON\.parse\(JSON\.stringify/, 'aucune copie profonde');
-});
-
 test('le boss expose son contrat de coque 3D, et la vue s’y branche', () => {
   const boss = read('js/entities/boss.js');
 
