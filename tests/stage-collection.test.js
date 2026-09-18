@@ -269,6 +269,14 @@ test('la transition attend le ramassage puis repart sur son délai normal', () =
     'la fermeture ne doit pas dépendre d’un état du module');
   assert.match(game, /const champVide = /, 'la fermeture doit dépendre du champ réel');
 
+  // Tant qu'un bonus est en vol, la fenêtre est PROLONGÉE au lieu d'expirer.
+  assert.match(game, /pendingCollectMs = TEMPO\.STAGE_COLLECT_MS;/,
+    'la fenêtre doit pouvoir être prolongée');
+  // ...mais jamais sans limite : un bonus inatteignable ne doit pas figer la partie.
+  assert.match(game, /STAGE_COLLECT_MAX_MS/, 'un garde-fou doit plafonner la prolongation');
+  assert.match(read('js/core/config.js'), /STAGE_COLLECT_MAX_MS\s*:\s*\d+/,
+    'le garde-fou doit être réglable dans config.js');
+
   // Aucun chemin de sortie ne doit laisser la fenêtre ouverte.
   assert.match(game, /pendingCollectMs = -1;\s*\n\s*resetPowerUpCollection/, 'le retour au menu doit annuler la fenêtre');
   assert.match(game, /pendingTransitionMs = -1;\s*\n\s*pendingCollectMs = -1;/, 'la boutique d’Assaut doit l’annuler aussi');

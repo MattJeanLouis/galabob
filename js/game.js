@@ -20,6 +20,8 @@ let assaultShopFireArmed = true; // exige un relâchement après le dernier kill
 let pendingTransitionMs = -1;
 // Fenêtre de ramassage des bonus de fin de stage (ms de temps de jeu)
 let pendingCollectMs = -1;
+// Instant (temps de jeu) où la fenêtre courante s'est ouverte : garde-fou
+let collectStartedAt = 0;
 let sectorTransitPending = false;
 let sectorTransitPreview = false;
 let environmentalHazardTimer = 16000;
@@ -381,19 +383,29 @@ function update(deltaTime) {
       return;
     }
 
-    // Fenêtre de ramassage de fin de stage : les bonus en l'air sont aimantés
-    // vers le joueur. Elle ne peut se fermer que de DEUX façons, et jamais
-    // autrement : le champ est vide (tout est ramassé), ou le temps est écoulé.
-    // L'ancienne condition `!isPowerUpCollectionActive()` fermait la fenêtre
-    // dès la première frame si l'état du module n'était pas celui attendu —
-    // d'où une transition instantanée. Un test d'état ne doit jamais décider
-    // du flux : seul le ramassage réel compte.
+    // Fenêtre de ramassage de fin de stage. Tant qu'un bonus est à l'écran, la
+    // fenêtre NE PEUT PAS expirer : elle est relancée dès qu'elle approche de
+    // zéro. Le délai n'est donc pas une limite subie par le joueur, c'est le
+    // temps laissé au champ pour se vider — et il ne repart que s'il reste
+    // réellement quelque chose à ramasser (jamais pendant la transition).
     if (pendingCollectMs >= 0) {
       pendingCollectMs -= deltaTime;
       const champVide = (typeof powerUps === 'undefined' || !powerUps || powerUps.length === 0);
-      if (champVide || pendingCollectMs <= 0) {
+      // Garde-fou : le temps de GÉNÉROSITÉ est plafonné, quoi qu'il arrive.
+      const epuise = (typeof FRAME !== 'undefined' && FRAME)
+        ? (FRAME.time - collectStartedAt) * 1000 >= TEMPO.STAGE_COLLECT_MAX_MS
+        : false;
+
+      if (champVide || epuise) {
+        console.log('[ramassage] champ', champVide ? 'vide' : 'NON VIDE (garde-fou)',
+          '· bonus restants =', champVide ? 0 : powerUps.length, '· transition en 120 ms');
         pendingCollectMs = -1;
         completePowerUpCollection();
+      } else if (pendingCollectMs <= 0) {
+        // Un bonus attend encore : on lui redonne le temps d'arriver au lieu
+        // de le perdre par expiration.
+        console.log('[ramassage] bonus encore en vol =', powerUps.length, '· fenêtre prolongée');
+        pendingCollectMs = TEMPO.STAGE_COLLECT_MS;
       }
     }
 
@@ -880,7 +892,9 @@ function handleStageCompletion() {
     // instantanée, précisément le symptôme qu'on corrige).
     pendingTransitionMs = TEMPO.STAGE_COMPLETE_DELAY_MS;
     pendingCollectMs = TEMPO.STAGE_COLLECT_MS;
+    collectStartedAt = (typeof FRAME !== 'undefined' && FRAME) ? FRAME.time : 0;
     beginPowerUpCollection();
+    console.log('[ramassage] fin de stage · bonus à ramasser =', powerUps.length);
 
     // --- étapes non critiques : une erreur ici ne doit rien interrompre ------
     try {
