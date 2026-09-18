@@ -486,17 +486,29 @@ const GAME3D = (() => {
 
     // --- marqueurs écran, pour que game.js trace les mêmes tracés néon -----
     const aim = new THREE.Vector3();
-    const toScreen = (x, y) => {
-      aim.set(x, y, 0).project(camera);
+    // `z` est la PROFONDEUR de l'objet dans le plan — pas une hauteur. L'oublier
+    // projetait tous les repères à la même distance : un ennemi du fond et un
+    // ennemi proche tombaient sur le MÊME pixel, et les tracés néon (bonus,
+    // explosions, boss, repère du vaisseau) étaient tous décalés.
+    const toScreen = (x, z) => {
+      aim.set(x, 0, z).project(camera);
       return { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
     };
-    const shipMarker = toScreen(px, 0);
+    const shipMarker = toScreen(px, pz);
     const enemyMarkers = [];
     for (let i = 0; i < enemies.length; i++) {
       const e = enemies[i];
       if (!e || e.isDeleted) continue;
-      const p = toScreen(planeX(e.x + (e.width || 0) / 2), 0);
-      enemyMarkers.push({ x: p.x, y: p.y + 2 });
+      const ex = planeX(e.x + (e.width || 0) / 2), ez = planeZ(e.y + (e.height || 0) / 2);
+      const p = toScreen(ex, ez);
+      // Grossissement apparent : même calcul que pour les bonus, pour que les
+      // repères tracés par-dessus la scène respectent la profondeur.
+      aim.set(ex, 0, ez + 40).project(camera);
+      const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
+      enemyMarkers.push({
+        x: p.x, y: p.y + 2,
+        scale: Math.hypot(proche.x - p.x, proche.y - p.y) / 40
+      });
     }
 
     // --- bonus : ils doivent rester identifiables en perspective ------------
@@ -507,7 +519,7 @@ const GAME3D = (() => {
       if (!p) continue;
       const cx = planeX(p.x + (p.width || 0) / 2);
       const cz = planeZ(p.y + (p.height || 0) / 2);
-      const centre = toScreen(cx, 0);
+      const centre = toScreen(cx, cz);
       // Échelle : on projette le même point 40 unités plus près de l'œil.
       aim.set(cx, 0, cz + 40).project(camera);
       const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
@@ -529,7 +541,7 @@ const GAME3D = (() => {
       const p = fx[i];
       if (!p || p.alive === false || !(p.life > 0) || !(p.r > 2)) continue;
       const cx = planeX(p.x), cz = planeZ(p.y);
-      const centre = toScreen(cx, 0);
+      const centre = toScreen(cx, cz);
       aim.set(cx, 0, cz + 40).project(camera);
       const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
       const grossissement = Math.hypot(proche.x - centre.x, proche.y - centre.y) / 40;
@@ -547,7 +559,7 @@ const GAME3D = (() => {
     if (snapshot.boss) {
       const b = snapshot.boss;
       const bx = planeX(b.x), bz = planeZ(b.y);
-      const centre = toScreen(bx, 0);
+      const centre = toScreen(bx, bz);
       aim.set(bx, 0, bz + 40).project(camera);
       const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
       const grossissement = Math.hypot(proche.x - centre.x, proche.y - centre.y) / 40;

@@ -19,11 +19,37 @@ const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8'
 
 /** Faux THREE : juste ce que le module utilise, plus des compteurs. */
 function fauxThree(log) {
+  const sub = (a, b) => ({ x: a.x - b.x, y: a.y - b.y, z: a.z - b.z });
+  const dot = (a, b) => a.x * b.x + a.y * b.y + a.z * b.z;
+  const cross = (a, b) => ({
+    x: a.y * b.z - a.z * b.y, y: a.z * b.x - a.x * b.z, z: a.x * b.y - a.y * b.x
+  });
+  const norm = (v) => {
+    const l = Math.hypot(v.x, v.y, v.z) || 1;
+    return { x: v.x / l, y: v.y / l, z: v.z / l };
+  };
+
   class Vector3 {
     constructor(x = 0, y = 0, z = 0) { this.x = x; this.y = y; this.z = z; }
     set(x, y, z) { this.x = x; this.y = y; this.z = z; return this; }
     copy(v) { return this.set(v.x, v.y, v.z); }
-    project() { this.x = 0; this.y = 0; this.z = 0; return this; }
+    /** VRAIE projection sténopé : sans elle, on ne peut pas vérifier le cadrage
+     *  (où tombe le vaisseau, si un ennemi lointain est plus petit…). */
+    project(camera) {
+      const avant = norm(sub(camera.__cible || { x: 0, y: 0, z: 0 }, camera.position));
+      const droite = norm(cross(avant, camera.up));
+      const haut = cross(droite, avant);
+      const v = sub(this, camera.position);
+      const zc = dot(v, avant);
+      const f = Math.tan((camera.fov * Math.PI / 180) / 2);
+      const xc = dot(v, droite);
+      const yc = dot(v, haut);
+      const profondeur = zc > 0.001 ? zc : 0.001;
+      this.x = xc / (profondeur * f * camera.aspect);
+      this.y = yc / (profondeur * f);
+      this.z = profondeur;
+      return this;
+    }
   }
   class Objet {
     constructor(kind) {
@@ -48,8 +74,11 @@ function fauxThree(log) {
     },
     Scene: class { constructor() { this.enfants = []; } add(o) { this.enfants.push(o); log.push({ kind: 'add', objet: o }); } },
     PerspectiveCamera: class {
-      constructor() { this.position = new Vector3(); this.up = new Vector3(0, 1, 0); this.aspect = 1; }
-      lookAt() { log.push({ kind: 'lookAt' }); }
+      constructor(fov) { this.fov = fov || 50; this.position = new Vector3(); this.up = new Vector3(0, 1, 0); this.aspect = 1; this.__cible = null; }
+      lookAt(x, y, z) {
+        this.__cible = { x, y, z };
+        log.push({ kind: 'lookAt', x, y, z });
+      }
       updateProjectionMatrix() {}
     },
     Sprite, Mesh, Vector3,
@@ -171,6 +200,50 @@ test('sans SPACE3D, la vue fonctionne quand même', () => {
   const r = GAME3D.frame(instantane(), 800, 600);
   assert.ok(r && r.canvas, 'le ciel est un bonus, pas une dépendance');
   assert.equal(r.markers.enemies.length, 2, 'le reste doit continuer de fonctionner');
+});
+
+test('CADRAGE : le vaisseau est DEVANT, en bas du cadre', () => {
+  const { GAME3D } = charger();
+  const snap = instantane();
+  snap.enemies = [];
+  const r = GAME3D.frame(snap, 800, 600);
+
+  // Être « derrière le vaisseau », c'est le voir bas dans le cadre et de près.
+  assert.ok(r.markers.ship.y > 600 * 0.55,
+    `le vaisseau doit être dans la moitié basse (y = ${Math.round(r.markers.ship.y)})`);
+});
+
+test('CADRAGE : la profondeur se lit — le lointain est plus haut et plus petit', () => {
+  const { GAME3D } = charger();
+  const snap = instantane();
+  // Deux ennemis IDENTIQUES, l'un au fond du plan, l'autre près du joueur.
+  snap.enemies = [
+    { x: 300, y: 40, width: 32, height: 32, type: 'normal' },    // loin
+    { x: 300, y: 560, width: 32, height: 32, type: 'normal' }    // près
+  ];
+  snap.playerBullets = []; snap.enemyBullets = []; snap.powerUps = [];
+  snap.explosions = []; snap.boss = null;
+
+  const r = GAME3D.frame(snap, 800, 600);
+  const [loin, pres] = r.markers.enemies;
+  assert.ok(loin.y < pres.y,
+    `le lointain doit être plus HAUT dans le cadre (${Math.round(loin.y)} < ${Math.round(pres.y)})`);
+  assert.ok(loin.scale < pres.scale,
+    `et plus PETIT (${loin.scale.toFixed(3)} < ${pres.scale.toFixed(3)}) — sinon il n'y a pas de profondeur`);
+});
+
+test('CADRAGE : un ennemi qui approche grossit', () => {
+  const { GAME3D } = charger();
+  const tailles = [];
+  for (const y of [60, 300, 540]) {
+    const snap = instantane();
+    snap.enemies = [{ x: 300, y, width: 32, height: 32, type: 'normal' }];
+    snap.playerBullets = []; snap.enemyBullets = []; snap.powerUps = [];
+    snap.explosions = []; snap.boss = null;
+    tailles.push(GAME3D.frame(snap, 800, 600).markers.enemies[0].scale);
+  }
+  assert.ok(tailles[0] < tailles[1] && tailles[1] < tailles[2],
+    `le grossissement doit croître avec la proximité (${tailles.map((t) => t.toFixed(3)).join(' < ')})`);
 });
 
 test('sans boss, aucune coque n’est affichée', () => {
