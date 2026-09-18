@@ -1288,6 +1288,9 @@ function stageSnapshot() {
     // Les projectiles ennemis font partie de la lisibilité : en perspective on
     // ne voyait pas ce qui arrivait, faute de les projeter.
     enemyBullets: (typeof enemyBullets !== 'undefined') ? enemyBullets : [],
+    // Les bonus doivent rester identifiables : sans eux, on ne sait pas quoi
+    // aller chercher en perspective.
+    powerUps: (typeof powerUps !== 'undefined' && powerUps) ? powerUps : [],
     shipRenderer: (typeof player !== 'undefined' && player && player.shipRenderer)
       ? player.shipRenderer : 'legacy-vector'
   };
@@ -1324,6 +1327,26 @@ function drawStagePerspective() {
   place(ctx);
   ctx.drawImage(result.canvas, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   ctx.restore();
+
+  // --- BONUS : même grammaire que la vue à plat, projetée -------------------
+  // Le sprite 3D n'existe pas pour les bonus : on les trace en néon à leur
+  // position projetée, dans la couleur de leur famille. Ils restent donc
+  // identifiables au premier coup d'œil, comme dans le mode classique.
+  const pickups = (result.markers && result.markers.powerups) || [];
+  if (pickups.length && typeof NEON !== 'undefined') {
+    ctx.save();
+    place(ctx);
+    for (const p of pickups) {
+      const cle = 'powerup.' + (p.type || 'double');
+      const taille = Math.max(7, Math.min(26, (p.scale || 1) * 30));
+      const pulse = Math.sin((FRAME.time * 6) + p.x * 0.01) * 0.16;
+      NEON.ring(ctx, p.x, p.y, taille + pulse * 10, 1.3, cle,
+        { alpha: 0.55 * t, dash: [5, 4], passes: 2 });
+      NEON.dot(ctx, p.x, p.y, Math.max(2.2, taille * 0.28), cle,
+        { alpha: 0.9 * t, glowScale: 0.5, passes: 2 });
+    }
+    ctx.restore();
+  }
 
   // Le vaisseau est marqué d'un noyau blanc : sa VRAIE hitbox, identique à
   // celle de la vue à plat. Le joueur doit pouvoir lire son esquive partout.

@@ -422,11 +422,33 @@ const GAME3D = (() => {
       enemyMarkers.push({ x: p.x, y: p.y + 2 });
     }
 
+    // --- bonus : ils doivent rester identifiables en perspective ------------
+    const pickups = snapshot.powerUps || [];
+    const powerupMarkers = [];
+    for (let i = 0; i < pickups.length; i++) {
+      const p = pickups[i];
+      if (!p) continue;
+      const cx = planeX(p.x + (p.width || 0) / 2);
+      const cz = planeZ(p.y + (p.height || 0) / 2);
+      const centre = toScreen(cx, 0);
+      // Échelle : on projette le même point 40 unités plus près de l'œil.
+      aim.set(cx, 0, cz + 40).project(camera);
+      const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
+      const grossissement = Math.hypot(proche.x - centre.x, proche.y - centre.y) / 40;
+      powerupMarkers.push({
+        x: centre.x, y: centre.y,
+        scale: grossissement,
+        type: p.type || 'double',
+        def: p.def || null
+      });
+    }
+
     return {
       canvas: renderer.domElement,
       markers: {
         ship: { x: shipMarker.x, y: shipMarker.y, visible: true },
-        enemies: enemyMarkers
+        enemies: enemyMarkers,
+        powerups: powerupMarkers
       }
     };
   }
