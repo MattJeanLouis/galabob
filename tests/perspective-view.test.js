@@ -48,9 +48,13 @@ test('l’instantané ne copie rien : il référence l’état vivant du jeu', (
   for (const champ of ['player: player', 'enemies: enemies', 'playerBullets: playerBullets']) {
     assert.ok(snapshot.includes(champ), `l’instantané doit référencer ${champ}`);
   }
-  // Aucune transformation de gameplay ne doit apparaître dans l’instantané.
-  assert.doesNotMatch(snapshot, /\bhp\b|\bdamage\b|\bscore\b|\.splice\(|\.push\(/,
-    'l’instantané ne doit ni altérer ni recopier les données de jeu');
+  // Des LECTURES scalaires sont permises (la vie du boss, sa phase…) : la vue
+  // n'a pas à recalculer un pourcentage. Ce qui est interdit, c'est de COPIER
+  // les collections ou d'en modifier une seule.
+  assert.doesNotMatch(snapshot, /\.slice\(|\.map\(|JSON\.parse|JSON\.stringify/,
+    'aucune copie de collection : la vue doit lire l’état vivant');
+  assert.doesNotMatch(snapshot, /\.push\(|\.splice\(|delete\s/,
+    'aucune mutation : la vue ne simule rien');
 });
 
 test('la bascule est un plan de caméra animé, pas un simple fondu', () => {
@@ -77,7 +81,7 @@ test('le point de vue est mémorisé et restauré', () => {
 
 test('les éléments de jeu à voir sont projetés : bonus et explosions', () => {
   const module3d = read('js/render/game3d.js');
-  for (const marqueur of ['enemies', 'powerups', 'explosions', 'ship']) {
+  for (const marqueur of ['enemies', 'powerups', 'explosions', 'boss', 'ship']) {
     assert.match(module3d, new RegExp(marqueur + ':'), `le marqueur « ${marqueur} » doit être projeté`);
   }
 
@@ -85,13 +89,14 @@ test('les éléments de jeu à voir sont projetés : bonus et explosions', () =>
   // Chaque marqueur doit être TRACÉ, sinon le calcul ne sert à rien.
   assert.match(game, /result\.markers && result\.markers\.powerups/, 'les bonus doivent être tracés');
   assert.match(game, /result\.markers && result\.markers\.explosions/, 'les explosions doivent être tracées');
+  assert.match(game, /result\.markers\.boss|markers && result\.markers\.boss/, 'le boss doit être tracé');
 
   // Et l'instantané doit transporter les sources correspondantes.
   const snapshot = read('js/game.js').slice(
     read('js/game.js').indexOf('function stageSnapshot()'),
     read('js/game.js').indexOf('/** Compose la vue en perspective')
   );
-  for (const champ of ['enemyBullets', 'powerUps', 'explosions']) {
+  for (const champ of ['enemyBullets', 'powerUps', 'explosions', 'boss']) {
     assert.ok(snapshot.includes(champ + ':'), `l’instantané doit porter ${champ}`);
   }
 });

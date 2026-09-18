@@ -526,13 +526,32 @@ const GAME3D = (() => {
       });
     }
 
+    // --- boss : le localiser, et lire sa vie sans quitter la vue ------------
+    let bossMarker = null;
+    if (snapshot.boss) {
+      const b = snapshot.boss;
+      const bx = planeX(b.x), bz = planeZ(b.y);
+      const centre = toScreen(bx, 0);
+      aim.set(bx, 0, bz + 40).project(camera);
+      const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
+      const grossissement = Math.hypot(proche.x - centre.x, proche.y - centre.y) / 40;
+      bossMarker = {
+        x: centre.x, y: centre.y,
+        r: Math.max(18, (b.rayon || 90) * grossissement),
+        hp: Math.max(0, Math.min(1, b.hp == null ? 1 : b.hp)),
+        color: b.color || null,
+        phase: b.phase || 1
+      };
+    }
+
     return {
       canvas: renderer.domElement,
       markers: {
         ship: { x: shipMarker.x, y: shipMarker.y, visible: true },
         enemies: enemyMarkers,
         powerups: powerupMarkers,
-        explosions: explosionMarkers
+        explosions: explosionMarkers,
+        boss: bossMarker
       }
     };
   }

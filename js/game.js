@@ -1294,6 +1294,18 @@ function stageSnapshot() {
     // Les impacts doivent se produire LÀ OÙ ils ont lieu : sans eux, une
     // destruction lointaine ne se lisait pas.
     explosions: (typeof explosions !== 'undefined') ? explosions : [],
+    // Le boss : sa position et sa vie, pour qu'il soit localisable en
+    // perspective. `_state` est l'introspection officielle du module boss.
+    boss: (typeof BOSS !== 'undefined' && BOSS && BOSS.isActive && BOSS.isActive())
+      ? {
+          x: BOSS._state ? BOSS._state.x : CANVAS_WIDTH / 2,
+          y: BOSS._state ? BOSS._state.y : 120,
+          rayon: BOSS._state && BOSS._state.rayon ? BOSS._state.rayon : 90,
+          hp: (typeof BOSS.getHpFraction === 'function') ? BOSS.getHpFraction() : 1,
+          color: (typeof BOSS.getColor === 'function') ? BOSS.getColor() : null,
+          phase: (typeof BOSS.getPhase === 'function') ? BOSS.getPhase() : 1
+        }
+      : null,
     shipRenderer: (typeof player !== 'undefined' && player && player.shipRenderer)
       ? player.shipRenderer : 'legacy-vector'
   };
@@ -1330,6 +1342,28 @@ function drawStagePerspective() {
   place(ctx);
   ctx.drawImage(result.canvas, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   ctx.restore();
+
+  // --- BOSS : anneau de cible et jauge de vie, à sa position projetée ------
+  // Il n'est pas encore coiffé de sa coque 3D : il est LOCALISABLE et sa vie
+  // se lit, ce qui est le minimum pour se battre. La coque viendra ensuite.
+  const boss = result.markers && result.markers.boss;
+  if (boss && typeof NEON !== 'undefined') {
+    ctx.save();
+    place(ctx);
+    const cle = boss.color || 'enemyElite';
+    // Deux cercles concentriques : la silhouette, puis la part de vie restante.
+    NEON.ring(ctx, boss.x, boss.y, boss.r, 1.6, cle,
+      { alpha: 0.42 * t, dash: [7, 5], passes: 2, composite: 'lighter' });
+    NEON.ring(ctx, boss.x, boss.y, boss.r * 0.82, 2.6, 'danger',
+      { alpha: 0.75 * t, passes: 3, composite: 'lighter' });
+    // La jauge suit le pourtour : lisible sans quitter l'action.
+    const arc = Math.max(0.02, boss.hp);
+    NEON.ring(ctx, boss.x, boss.y, boss.r * 1.12, 2.2, 'playerCore',
+      { alpha: 0.6 * t, dash: [arc * 160, 999], dashOffset: -40, passes: 2, composite: 'lighter' });
+    NEON.dot(ctx, boss.x, boss.y, Math.max(3, boss.r * 0.14), cle,
+      { alpha: 0.85 * t, glowScale: 0.5, passes: 2 });
+    ctx.restore();
+  }
 
   // --- EXPLOSIONS : les impacts se produisent LÀ OÙ ils ont lieu -----------
   // Même grammaire que la vue à plat (halo additif), mais à la position
