@@ -38,6 +38,7 @@ const GAME3D = (() => {
   const FOV = 44;
   const HORIZON = 6000;            // distance du plan de fond
 
+
   // Le sol ne s'étend que sur la zone réellement survolée : un plan plus large
   // devenait un aplat laiteux qui noyait la scène dans le bloom.
   const GROUND_HALF_WIDTH = 2600;
@@ -195,10 +196,13 @@ const GAME3D = (() => {
     // ressortir les vaisseaux — et c'est l'ambiance du mode 2D.
   }
 
-  /** PAS de ciel synthétique ici. Un plan de lueur, même discret, devenait
-   *  après bloom une bande horizontale qui écrasait la scène. L'ambiance vient
-   *  du décor 2D lui-même (planètes filaires, nébuleuses, poussière), déjà
-   *  dessiné dans le tampon émissif : la vue n'a qu'à le laisser respirer. */
+  /** CIEL : pas encore en place, et c'est un manque assumé.
+   *  L'objectif demande « le même ciel » que la vue à plat. La bonne matière
+   *  existe — `SPACE3D.frame()` rend la planète filaire du jeu — mais elle
+   *  attend des paramètres de placement (`x`, `y`, `radius`) que `backdrop.js`
+   *  calcule pour SA mise en page. Sans eux l'astre ne se dessine pas : plutôt
+   *  qu'un plan vide, on n'ajoute rien tant que le placement n'est pas réglé.
+   *  Tant qu'il manque, la vue en perspective a un fond sombre uni. */
   function buildSky() { sky = null; }
 
   function init() {
