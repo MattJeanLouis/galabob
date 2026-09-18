@@ -73,6 +73,11 @@ function gameLoop(timestamp) {
   FRAME.dt = dtMs / 1000;
   FRAME.time += FRAME.dt;
 
+  // L'animation de bascule de vue avance en temps RÉEL : un hitstop ne doit pas
+  // la figer au milieu d'un mouvement de caméra.
+  try { if (typeof updateViewBlend === 'function') updateViewBlend(rawDtMs); }
+  catch (e) { /* la bascule ne doit jamais casser la boucle */ }
+
   try { update(dtMs); } catch (e) { console.error('update() a levé :', e); }
   try { draw(); } catch (e) { console.error('draw() a levé :', e); }
 

@@ -231,6 +231,12 @@ document.addEventListener('keydown', function (e) {
   }
 
   // Touche F3 pour afficher/masquer les stats
+  if ((e.key === 'c' || e.key === 'C') && gameState === "playing" && !e.repeat) {
+    // Bascule entre la vue à plat et la vue en perspective. Le MÊME stage, la
+    // même simulation : on ne change que la caméra.
+    if (typeof toggleViewMode === 'function') toggleViewMode();
+  }
+
   if (e.key === 'F3') {
     GAME_CONFIG.showDebugInfo = !GAME_CONFIG.showDebugInfo;
     try { localStorage.setItem('showDebugInfo', GAME_CONFIG.showDebugInfo); } catch (err) { /* ignoré */ }

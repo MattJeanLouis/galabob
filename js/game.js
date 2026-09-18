@@ -22,6 +22,63 @@ let pendingTransitionMs = -1;
 let pendingCollectMs = -1;
 // Instant (temps de jeu) où la fenêtre courante s'est ouverte : garde-fou
 let collectStartedAt = 0;
+
+/* -----------------------------------------------------------------------------
+ *  VUE DES STAGES 2D — « à plat » (historique) ou « en perspective ».
+ *  Les deux regardent le MÊME stage et la MÊME simulation : seule la caméra
+ *  change. La bascule est donc instantanée, sans risque pour l'équilibrage, et
+ *  les hitboxes comme la progression restent rigoureusement identiques.
+ * -------------------------------------------------------------------------- */
+let viewMode = 'flat';          // 'flat' | 'perspective'
+let viewBlend = 0;              // 0 = à plat, 1 = perspective (animation en cours)
+const VIEW_BLEND_MS = 420;      // durée de la bascule
+
+/** Bascule de point de vue. Refusée si la vue en perspective est indisponible. */
+function toggleViewMode() {
+  const wantsPerspective = viewMode !== 'perspective';
+  if (wantsPerspective && typeof GAME3D !== 'undefined' &&
+      typeof GAME3D.isAvailable === 'function' && !GAME3D.isAvailable()) {
+    return false;
+  }
+  viewMode = wantsPerspective ? 'perspective' : 'flat';
+  try { gameEvent('uiSelect', { id: 'view' }); } catch (e) { /* audio facultatif */ }
+  try { JUICE.punch(0.012); JUICE.flash(PALETTE.get('player').glow, 160, 0.18); }
+  catch (e) { /* retour sensoriel facultatif */ }
+  // Le décor s'atténue tout de suite : l'animation ne doit pas le laisser
+  // éclairer la scène pendant la bascule.
+  updateViewBlend(0);
+  return true;
+}
+
+/** Avance l'animation de bascule en temps RÉEL (jamais gelée par un hitstop). */
+function updateViewBlend(realDtMs) {
+  const target = viewMode === 'perspective' ? 1 : 0;
+  if (viewBlend === target) return;
+  const step = Math.max(0, Number(realDtMs) || 0) / VIEW_BLEND_MS;
+  viewBlend = target > viewBlend
+    ? Math.min(target, viewBlend + step)
+    : Math.max(target, viewBlend - step);
+  // Le décor céleste s'atténue progressivement : réglé pour la vue à plat, il
+  // devenait un aplat laiteux dès qu'on regardait l'horizon.
+  if (typeof BACKDROP !== 'undefined' && BACKDROP && typeof BACKDROP.setViewDim === 'function') {
+    try { BACKDROP.setViewDim(1 - viewBlend * 0.85); } catch (e) { /* décor facultatif */ }
+  }
+}
+
+/** Petit pont de commande, sur le modèle de `window.GALABOB` : il rend la
+ *  bascule pilotable au clavier, depuis la console, et par les tests. */
+window.GALABOB_VIEW = {
+  toggle: () => toggleViewMode(),
+  perspective: () => {
+    // On n'active pas une vue dont le rendu est indisponible : l'écran
+    // resterait vide. `toggleViewMode` porte déjà ce garde-fou.
+    viewMode = 'flat'; viewBlend = 0;
+    return toggleViewMode();
+  },
+  flat: () => { viewMode = 'flat'; viewBlend = 0; updateViewBlend(0); },
+  state: () => ({ mode: viewMode, blend: viewBlend }),
+  snapshot: () => stageSnapshot()
+};
 let sectorTransitPending = false;
 let sectorTransitPreview = false;
 let environmentalHazardTimer = 16000;
@@ -1195,6 +1252,51 @@ function draw() {
   }
 }
 
+/**
+ * L'instantané transmis à la vue en perspective : uniquement ce que la caméra a
+ * besoin de VOIR. Aucune donnée de gameplay n'est copiée ni modifiée — la
+ * simulation continue de tourner exactement comme en vue à plat.
+ */
+function stageSnapshot() {
+  return {
+    player: player,
+    enemies: enemies,
+    playerBullets: playerBullets,
+    shipRenderer: (typeof player !== 'undefined' && player && player.shipRenderer)
+      ? player.shipRenderer : 'legacy-vector'
+  };
+}
+
+/** Compose la vue en perspective des stages 2D dans le buffer émissif.
+ *  @returns {boolean} false si le rendu 3D est indisponible — la boucle repasse
+ *  alors en vue à plat, sinon l'écran resterait vide. */
+function drawStagePerspective() {
+  const result = (typeof GAME3D !== 'undefined' && typeof GAME3D.frame === 'function')
+    ? GAME3D.frame(stageSnapshot(), CANVAS_WIDTH, CANVAS_HEIGHT)
+    : null;
+  if (!result || !result.canvas) return false;
+
+  // Le canvas 3D entre dans la MÊME scène émissive que la vue à plat : c'est ce
+  // qui lui donne le bloom, l'aberration et la vignette du mode classique.
+  // `viewBlend` sert de fondu enchaîné pendant la bascule.
+  ctx.save();
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.globalAlpha = Math.max(0, Math.min(1, viewBlend));
+  ctx.drawImage(result.canvas, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  ctx.restore();
+
+  // Le vaisseau est marqué d'un noyau blanc : sa VRAIE hitbox, identique à
+  // celle de la vue à plat. Le joueur doit pouvoir lire son esquive partout.
+  const marker = result.markers && result.markers.ship;
+  if (marker && marker.visible && typeof NEON !== 'undefined') {
+    NEON.dot(ctx, marker.x, marker.y, 2.4, 'playerCore',
+      { alpha: 0.85 * viewBlend, glowScale: 0.35, passes: 2 });
+    NEON.ring(ctx, marker.x, marker.y, 9, 1.1, 'player',
+      { alpha: 0.42 * viewBlend, dash: [3, 5], passes: 2 });
+  }
+  return true;
+}
+
 /** Tout le contenu de la scène. `ctx` pointe ici sur le buffer émissif. */
 function drawScene() {
   // --- transition de stage -------------------------------------------------
@@ -1258,6 +1360,25 @@ function drawScene() {
   }
 
   // --- jeu -----------------------------------------------------------------
+  // VUE EN PERSPECTIVE : le même stage, la même simulation, une autre caméra.
+  // Seul le rendu change — hitboxes, dégâts et progression restent ceux du jeu.
+  if (viewBlend > 0.001) {
+    if (drawStagePerspective()) return;
+    // Rendu 3D indisponible : on repasse proprement à la vue à plat plutôt que
+    // de laisser un écran vide. La raison est annoncée au joueur.
+    viewMode = 'flat';
+    viewBlend = 0;
+    if (typeof BACKDROP !== 'undefined' && BACKDROP && typeof BACKDROP.setViewDim === 'function') {
+      try { BACKDROP.setViewDim(1); } catch (e) { /* ignoré */ }
+    }
+    try {
+      const why = (typeof GAME3D !== 'undefined' && GAME3D.failureReason) ? GAME3D.failureReason() : null;
+      if (typeof hudAlert === 'function') {
+        hudAlert('VUE EN PERSPECTIVE INDISPONIBLE', why ? String(why).slice(0, 60) : 'WEBGL REQUIS', '#ff2b55', 2200);
+      }
+    } catch (e) { /* l'annonce ne doit jamais bloquer le rendu */ }
+  }
+
   // Le clignotement d'invulnérabilité est appliqué ici, sauf si le module
   // joueur déclare le gérer lui-même (player.handlesOwnBlink = true).
   const hidePlayer = player.blink && !player.handlesOwnBlink;

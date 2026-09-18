@@ -303,6 +303,7 @@ const BACKDROP = (function () {
     danger: 0, dangerHold: 0, dangerSet: 0,
     pulses: [], pulseE: 0,
     dim: 0,
+    viewDim: 1,          // atténuation demandée par la vue en perspective
 
     /* signature */
     parts: [], sigFade: 1, sigSwap: false,
@@ -1937,7 +1938,7 @@ const BACKDROP = (function () {
     const t0 = performance.now();
 
     const w = S.w, h = S.h;
-    const skyDim = (1 - S.dim * 0.72);
+    const skyDim = (1 - S.dim * 0.72) * (S.viewDim == null ? 1 : S.viewDim);
     const nebA = skyDim * 0.70 * (1 - S.danger * 0.45) * (1 + S.pulseE * 0.12);
 
     c.save();
@@ -2064,7 +2065,7 @@ const BACKDROP = (function () {
 
     const w = S.w, h = S.h;
     const b = S.theme.body;
-    const skyDim = (1 - S.dim * 0.55);
+    const skyDim = (1 - S.dim * 0.55) * (S.viewDim == null ? 1 : S.viewDim);
     let spaceFrame = null;
     try {
       if (typeof window !== 'undefined' && window.SPACE3D &&
@@ -2290,6 +2291,12 @@ const BACKDROP = (function () {
     /** Assombrissement du ciel demandé par l'éclipse, 0 → 1. */
     dim: function () { return S.dim; },
 
+    /** Atténue le décor céleste sans toucher à l'éclipse (`S.dim`). La vue en
+     *  perspective en a besoin : un ciel réglé pour la vue à plat devient un
+     *  aplat laiteux quand on regarde l'horizon. */
+    setViewDim: function (v) { S.viewDim = cl(Number(v) == null ? 1 : Number(v), 0, 1); },
+    viewDim: function () { return S.viewDim; },
+
     /** true : la nébuleuse est gérée ici, stars.js ne doit plus dessiner la sienne. */
     handlesNebula: function () { return !!(S.neb || S.nebPrev); },
 
@@ -2331,6 +2338,7 @@ const BACKDROP = (function () {
       S.pulses.length = 0;
       S.pulseE = 0;
       S.dim = 0;
+      S.viewDim = 1;
       S.danger = 0;
       S.intensity = 0;
       S.intensityHold = 0;
