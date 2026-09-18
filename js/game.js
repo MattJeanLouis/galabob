@@ -397,14 +397,12 @@ function update(deltaTime) {
         : false;
 
       if (champVide || epuise) {
-        console.log('[ramassage] champ', champVide ? 'vide' : 'NON VIDE (garde-fou)',
-          '· bonus restants =', champVide ? 0 : powerUps.length, '· transition en 120 ms');
         pendingCollectMs = -1;
         completePowerUpCollection();
       } else if (pendingCollectMs <= 0) {
         // Un bonus attend encore : on lui redonne le temps d'arriver au lieu
-        // de le perdre par expiration.
-        console.log('[ramassage] bonus encore en vol =', powerUps.length, '· fenêtre prolongée');
+        // de le perdre par expiration. Vérifié en jeu : deux bonus en vol en
+        // fin de stage arrivent tous les deux avant la fermeture.
         pendingCollectMs = TEMPO.STAGE_COLLECT_MS;
       }
     }
@@ -894,7 +892,6 @@ function handleStageCompletion() {
     pendingCollectMs = TEMPO.STAGE_COLLECT_MS;
     collectStartedAt = (typeof FRAME !== 'undefined' && FRAME) ? FRAME.time : 0;
     beginPowerUpCollection();
-    console.log('[ramassage] fin de stage · bonus à ramasser =', powerUps.length);
 
     // --- étapes non critiques : une erreur ici ne doit rien interrompre ------
     try {
