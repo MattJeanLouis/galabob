@@ -389,9 +389,6 @@ function update(deltaTime) {
       if (pendingCollectMs <= 0 || !isPowerUpCollectionActive()) {
         pendingCollectMs = -1;
         completePowerUpCollection();
-        // DIAGNOSTIC TEMPORAIRE (à retirer).
-        console.log('[ramassage] FERMETURE · reste', powerUps.length, 'bonus · transition dans',
-          TEMPO.STAGE_COMPLETE_DELAY_MS, 'ms');
       }
     }
 
@@ -868,10 +865,6 @@ function handleStageCompletion() {
   try {
     stageSystem.stageCompleted = true;
 
-    // DIAGNOSTIC TEMPORAIRE (à retirer) : ce que voit la fin de stage.
-    console.log('[ramassage] FIN DE STAGE', stageSystem.currentStage,
-      '· bonus en l’air =', (typeof powerUps !== 'undefined' && powerUps) ? powerUps.length : 'indisponible');
-
     for (let i = enemies.length - 1; i >= 0; i--) {
       if (enemies[i]) enemies[i].isDeleted = true;
     }
@@ -883,9 +876,6 @@ function handleStageCompletion() {
     pendingTransitionMs = TEMPO.STAGE_COMPLETE_DELAY_MS;
     pendingCollectMs = TEMPO.STAGE_COLLECT_MS;
     beginPowerUpCollection();
-    // DIAGNOSTIC TEMPORAIRE (à retirer).
-    console.log('[ramassage] fenêtre ouverte pour', pendingCollectMs,
-      'ms · bonus en l’air =', powerUps.length);
 
     // --- étapes non critiques : une erreur ici ne doit rien interrompre ------
     try {
@@ -914,8 +904,6 @@ function handleStageCompletion() {
     sectorTransitPending = (stageSystem.currentStage % 5) === 0;
   } catch (e) {
     console.error("Erreur dans handleStageCompletion :", e);
-    // DIAGNOSTIC TEMPORAIRE (à retirer).
-    console.log('[ramassage] ÉCHEC de la fin de stage :', e && e.message);
     softResetStage();
     return;
   }

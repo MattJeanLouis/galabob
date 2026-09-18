@@ -207,6 +207,15 @@ function createPowerUp(x, y, forcedType) {
   const def = forcedType ? powerUpDef(forcedType) : powerUpDef(rollPowerUpType());
   const trip = PALETTE.get(def.color);
 
+  // Un ennemi tué bas sur l'écran lâchait un bonus déjà hors du champ jouable :
+  // il était effacé avant d'être visible. On le fait naître DANS l'écran.
+  if (typeof CANVAS_WIDTH === 'number') {
+    x = clamp(x, 8, CANVAS_WIDTH - POWERUP_SIZE - 8);
+  }
+  if (typeof CANVAS_HEIGHT === 'number') {
+    y = clamp(y, 0, CANVAS_HEIGHT * 0.55);
+  }
+
   return {
     x: x,
     y: y,
@@ -243,8 +252,6 @@ let powerUpCollectPhase = 0;
 /** Ouvre la fenêtre de ramassage. Idempotent : un rappel ne la relance pas. */
 function beginPowerUpCollection() {
   powerUpCollectPhase = 1;
-  // DIAGNOSTIC TEMPORAIRE (à retirer) : trace la fenêtre de fin de stage.
-  console.log('[ramassage] OUVERTURE · bonus en l’air =', powerUps.length);
   try { JUICE.preset('powerUp', 0.35); } catch (e) { /* retour facultatif */ }
 }
 
@@ -335,8 +342,6 @@ function updatePowerUps(deltaTime) {
 
       // --- ramassage : AABB pleine taille (collision bénéfique) ------------
       if (rectIntersect(p, player)) {
-        // DIAGNOSTIC TEMPORAIRE (à retirer).
-        if (collecting) console.log('[ramassage] RAMASSÉ', p.type);
         applyPowerUp(p.type, p.x + p.width / 2, p.y + p.height / 2);
         powerUps.splice(i, 1);
       }

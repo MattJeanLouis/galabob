@@ -143,8 +143,9 @@ const TEMPO = {
   STAGE_COMPLETE_DELAY_MS: 120,   // avant : 300 ms
   // Fenêtre de ramassage de fin de stage : les bonus encore en l'air sont
   // aimantés vers le joueur avant l'écran de transition. Le stage suivant
-  // n'est lancé qu'après, et rien n'est perdu.
-  STAGE_COLLECT_MS: 1100,
+  // n'est lancé qu'après, et rien n'est perdu. La distance à couvrir va
+  // jusqu'à la diagonale de l'écran : 1500 ms laissent une marge confortable.
+  STAGE_COLLECT_MS: 1500,
   WAVE_SPAWN_DELAY_MS: 220,
   BOOT_DELAY_MS: 0,               // démarrage INSTANTANÉ — ne jamais remonter
 
@@ -165,7 +166,13 @@ const TEMPO = {
   COMBO_MAX: 8,                   // multiplicateur maximum
 
   /* ---------- POWER-UPS ---------- */
-  POWERUP_FALL_SPEED: 200,        // px/s
+  // Mesuré : à 200 px/s, un bonus lâché par un ennemi tué près du bas de
+  // l'écran n'avait plus que 0,2 s à vivre avant d'être effacé, et 2,2 s au
+  // mieux depuis le haut — il disparaissait avant d'être atteignable, ce qui
+  // vidait le champ en fin de stage (constaté : « 0 bonus en l'air » à chaque
+  // fin de stage). À 95 px/s, un bonus traverse l'écran en ~5 s et reste une
+  // cible à aller chercher.
+  POWERUP_FALL_SPEED: 95,         // px/s
   POWERUP_DURATION_MS: 9000,
   POWERUP_DROP_CHANCE: 0.15,      // proba par ennemi tué (13 types : voir powerups.js)
 

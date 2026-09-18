@@ -104,6 +104,7 @@ function sandbox() {
     powerUps: bindings.powerUps,
     bombWaves: bindings.bombWaves,
     stageSystem: bindings.stageSystem,
+    createPowerUp: (...args) => call('createPowerUp', ...args),
     updatePowerUps: (ms) => call('updatePowerUps', ms),
     resetStageBlast: () => call('resetStageBlast'),
     beginPowerUpCollection: () => call('beginPowerUpCollection'),
@@ -175,6 +176,55 @@ test('le ramassage de fin de stage attire les bonus et les encaisse', () => {
   bench.completePowerUpCollection();
   assert.equal(bench.consumePowerUpCollection(), true);
   assert.equal(bench.consumePowerUpCollection(), false, 'l’événement ne se consomme qu’une fois');
+});
+
+test('un bonus lâché par un ennemi tué en bas naît DANS l’écran', () => {
+  const bench = sandbox();
+
+  // Un ennemi meurt au ras du bord bas : sans recadrage, le bonus naissait
+  // hors du champ jouable et était effacé à la frame suivante.
+  const bas = bench.createPowerUp(600, 790, 'double');
+  assert.ok(bas.y <= 800 * 0.55,
+    `un bonus doit naître dans la moitié haute (y = ${bas.y})`);
+
+  // Et jamais collé à un bord horizontal, où il serait invisible.
+  const gauche = bench.createPowerUp(-40, 100, 'double');
+  const droite = bench.createPowerUp(2000, 100, 'double');
+  assert.ok(gauche.x >= 0, `bord gauche respecté (x = ${gauche.x})`);
+  assert.ok(droite.x + droite.width <= 1200, `bord droit respecté (x = ${droite.x})`);
+});
+
+test('un bonus reste atteignable : il ne disparaît plus avant d’être ramassé', () => {
+  const bench = sandbox();
+  const box = bench.createPowerUp(600, 40, 'double');
+
+  // Combien de temps avant d'être effacé par le bas de l'écran ?
+  const chute = bench.tempo.POWERUP_FALL_SPEED;
+  assert.ok(chute > 0, 'la vitesse de chute doit être définie');
+  const secondes = (800 + 40 - box.y) / chute;
+  assert.ok(secondes >= 4,
+    `un bonus doit vivre au moins 4 s à l’écran (mesuré ${secondes.toFixed(1)} s)`);
+
+  // Et il doit pouvoir atteindre le joueur, qui est en bas.
+  const versJoueur = (bench.player.y - box.y) / chute;
+  assert.ok(versJoueur <= secondes,
+    `le bonus doit pouvoir descendre jusqu’au joueur (${versJoueur.toFixed(1)} s)`);
+});
+
+test('le ramassage de fin de stage laisse le temps de venir à bout de l’écran', () => {
+  const bench = sandbox();
+  const box = makePowerUp();
+  bench.powerUps.push(box);
+  bench.beginPowerUpCollection();
+
+  let restant = bench.tempo.STAGE_COLLECT_MS;
+  while (bench.powerUps.length && restant > 0) {
+    bench.updatePowerUps(16);
+    restant -= 16;
+  }
+  assert.equal(bench.powerUps.length, 0, 'un bonus de coin doit être ramassé');
+  assert.ok(restant > bench.tempo.STAGE_COLLECT_MS * 0.25,
+    `la fenêtre doit garder une marge confortable (reste ${restant} ms)`);
 });
 
 test('la transition attend le ramassage puis repart sur son délai normal', () => {
