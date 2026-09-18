@@ -24,6 +24,7 @@ const GAME3D = (() => {
   const MAX_SHOTS = 160;
   const MAX_ENEMY_SHOTS = 96;
   const MAX_FX = 64;
+  const BOSS_PX = 512;
 
   // --- placement de la caméra ------------------------------------------------
   // La caméra se place AU-DESSUS de la position du vaisseau dans le plan :
@@ -80,6 +81,9 @@ const GAME3D = (() => {
   let enemySprites = [];
   let enemyTextures = {};
   let shotSprites = [];
+  let bossSprite = null;
+  let bossTexture = null;
+  let bossCanvas = null;
   let enemyShotSprites = [];
   let shotTexture = null;
   let enemyShotTextures = {};
@@ -302,6 +306,18 @@ const GAME3D = (() => {
         scene.add(sprite);
         enemySprites.push(sprite);
       }
+
+      // -- boss : sa coque 3D, rendue par le module boss lui-même -----------
+      bossCanvas = document.createElement('canvas');
+      bossCanvas.width = bossCanvas.height = BOSS_PX;
+      bossTexture = textureFrom(bossCanvas);
+      bossSprite = new THREE.Sprite(new THREE.SpriteMaterial({
+        map: bossTexture, transparent: true, depthTest: false, depthWrite: false,
+        toneMapped: false
+      }));
+      bossSprite.visible = false;
+      bossSprite.renderOrder = 22;
+      scene.add(bossSprite);
 
       // -- projectiles ennemis : gros et colorés, ils doivent SE VOIR --------
       for (let i = 0; i < MAX_ENEMY_SHOTS; i++) {
@@ -526,7 +542,7 @@ const GAME3D = (() => {
       });
     }
 
-    // --- boss : le localiser, et lire sa vie sans quitter la vue ------------
+    // --- boss : sa coque 3D, et de quoi lire sa vie sans quitter la vue -----
     let bossMarker = null;
     if (snapshot.boss) {
       const b = snapshot.boss;
@@ -535,13 +551,34 @@ const GAME3D = (() => {
       aim.set(bx, 0, bz + 40).project(camera);
       const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
       const grossissement = Math.hypot(proche.x - centre.x, proche.y - centre.y) / 40;
+
+      // La coque est COPIÉE dans notre texture : BOSS3D réutilise son canvas,
+      // on ne peut donc pas s'en servir directement comme texture.
+      if (bossSprite && bossCanvas && b.shell) {
+        try {
+          bossCanvas.getContext('2d').clearRect(0, 0, BOSS_PX, BOSS_PX);
+          bossCanvas.getContext('2d').drawImage(b.shell, 0, 0, BOSS_PX, BOSS_PX);
+          bossTexture.needsUpdate = true;
+          const taille = Math.max(48, (b.rayon || 90) * 2.6 * grossissement);
+          bossSprite.visible = true;
+          bossSprite.position.set(bx, 0, bz);
+          bossSprite.scale.set(taille, taille, 1);
+          bossSprite.material.opacity = Math.max(0, Math.min(1, b.alpha == null ? 1 : b.alpha));
+        } catch (e) { /* coque indisponible : le repère suffit */ }
+      } else if (bossSprite) {
+        bossSprite.visible = false;
+      }
+
       bossMarker = {
         x: centre.x, y: centre.y,
         r: Math.max(18, (b.rayon || 90) * grossissement),
         hp: Math.max(0, Math.min(1, b.hp == null ? 1 : b.hp)),
         color: b.color || null,
-        phase: b.phase || 1
+        phase: b.phase || 1,
+        shell: !!(bossSprite && bossSprite.visible)
       };
+    } else if (bossSprite) {
+      bossSprite.visible = false;
     }
 
     return {

@@ -117,6 +117,29 @@ test('la vue ne MODIFIE jamais la simulation : elle ne fait que lire', () => {
   assert.doesNotMatch(module3d, /JSON\.parse\(JSON\.stringify/, 'aucune copie profonde');
 });
 
+test('le boss expose son contrat de coque 3D, et la vue s’y branche', () => {
+  const boss = read('js/entities/boss.js');
+
+  // C'est le module boss qui possède ce contrat : les autres vues ne doivent
+  // pas recalculer des dimensions qu'elles ne connaissent pas.
+  assert.match(boss, /viewport: viewport/, 'le boss doit exposer viewport()');
+  const contrat = boss.slice(boss.indexOf('function viewport()'), boss.indexOf('function dessinerCoque3D'));
+  for (const champ of ['width', 'height', 'x', 'y', 'radius', 'angle', 'phase', 'parts']) {
+    assert.ok(contrat.includes(champ + ':'), `le contrat doit porter ${champ}`);
+  }
+  // Le rendu 2D de la coque doit passer par le MÊME contrat : une seule vérité.
+  assert.match(boss, /BOSS3D\.frame\(viewport\(\)\)/,
+    'le rendu 2D de la coque doit utiliser viewport(), pas une copie');
+
+  const game = read('js/game.js');
+  assert.match(game, /BOSS\.viewport\(\)/, 'la vue doit demander le contrat au boss');
+  assert.match(game, /BOSS3D\.frame\(BOSS\.viewport\(\)\)/, 'et lui faire rendre la coque');
+
+  // La vue doit préférer la coque et retomber sur un repère sinon.
+  assert.match(read('js/render/game3d.js'), /b\.shell/, 'la vue doit utiliser la coque');
+  assert.match(game, /if \(boss\.shell\)/, 'et adapter son tracé selon sa présence');
+});
+
 test('le rendu 3D entre dans le même pipeline néon que la vue à plat', () => {
   const game = read('js/game.js');
   const draw = game.slice(

@@ -3329,22 +3329,29 @@ const BOSS = (function () {
 
   /** Compose la coque 3D après le dessin vectoriel. Les points faibles 3D sont
    *  alimentés par les vraies pièces de collision, donc aucun décalage visuel. */
+  /** TOUT ce qu'il faut pour dessiner la coque 3D du boss.
+   *  C'est le module boss qui possède ce contrat : les autres vues (la vue en
+   *  perspective) s'y branchent au lieu de recalculer des dimensions qu'elles
+   *  ne connaissent pas. */
+  function viewport() {
+    return {
+      width: larg(), height: haut(), index: S.index,
+      x: S.x, y: S.y, radius: rayon3D(), angle: S.angle,
+      phase: S.phase, flash: S.flash, state: S.etat,
+      hp: fraction(),
+      death: S.etat === 'mort' ? S.tEtat / REGLAGES.agonie : 0,
+      pulse: S.memo && S.memo.pulse,
+      open: S.memo && (S.memo.ouv || S.memo.ouvert || S.memo.ouverture),
+      parts: S.parts
+    };
+  }
+
   function dessinerCoque3D(c) {
     if (typeof window === 'undefined' || !window.BOSS3D ||
         typeof window.BOSS3D.frame !== 'function') return false;
     let frame = null;
-    try {
-      frame = window.BOSS3D.frame({
-        width: larg(), height: haut(), index: S.index,
-        x: S.x, y: S.y, radius: rayon3D(), angle: S.angle,
-        phase: S.phase, flash: S.flash, state: S.etat,
-        hp: fraction(),
-        death: S.etat === 'mort' ? S.tEtat / REGLAGES.agonie : 0,
-        pulse: S.memo && S.memo.pulse,
-        open: S.memo && (S.memo.ouv || S.memo.ouvert || S.memo.ouverture),
-        parts: S.parts
-      });
-    } catch (_) { frame = null; }
+    try { frame = window.BOSS3D.frame(viewport()); }
+    catch (_) { frame = null; }
     if (!frame) return false;
     c.save();
     c.globalCompositeOperation = 'source-over';
@@ -3587,6 +3594,9 @@ const BOSS = (function () {
     getMenace: function () { return S.menace; },
     getScore: function () { return S.points; },
     getDrones: function () { return S.drones; },
+
+    /** Paramètres de rendu de la coque 3D, pour les autres vues. */
+    viewport: viewport,
 
     /* --- collisions --- */
     hitTest: hitTest,

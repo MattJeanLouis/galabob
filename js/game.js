@@ -1276,6 +1276,37 @@ function draw() {
 }
 
 /**
+ * Ce que la vue en perspective a besoin de savoir du boss : où il est, et sa
+ * coque 3D déjà rendue. C'est le module boss qui la rend (`viewport()`), donc
+ * c'est le MÊME art que la vue à plat — simplement projeté.
+ */
+function bossViewSnapshot() {
+  if (typeof BOSS === 'undefined' || !BOSS || !BOSS.isActive || !BOSS.isActive()) return null;
+  const etat = BOSS._state || {};
+  const vue = {
+    x: etat.x == null ? CANVAS_WIDTH / 2 : etat.x,
+    y: etat.y == null ? 120 : etat.y,
+    rayon: etat.rayon == null ? 90 : etat.rayon,
+    hp: (typeof BOSS.getHpFraction === 'function') ? BOSS.getHpFraction() : 1,
+    color: (typeof BOSS.getColor === 'function') ? BOSS.getColor() : null,
+    phase: (typeof BOSS.getPhase === 'function') ? BOSS.getPhase() : 1,
+    shell: null, alpha: 1
+  };
+  try {
+    if (typeof BOSS.viewport === 'function' && typeof BOSS3D !== 'undefined' &&
+        BOSS3D && typeof BOSS3D.frame === 'function') {
+      const coque = BOSS3D.frame(BOSS.viewport());
+      if (coque && coque.canvas) {
+        vue.shell = coque.canvas;
+        vue.alpha = coque.alpha == null ? 1 : coque.alpha;
+        vue.scale = coque.scale == null ? 1 : coque.scale;
+      }
+    }
+  } catch (e) { /* la coque est un bonus : son absence ne casse pas la vue */ }
+  return vue;
+}
+
+/**
  * L'instantané transmis à la vue en perspective : uniquement ce que la caméra a
  * besoin de VOIR. Aucune donnée de gameplay n'est copiée ni modifiée — la
  * simulation continue de tourner exactement comme en vue à plat.
@@ -1296,16 +1327,7 @@ function stageSnapshot() {
     explosions: (typeof explosions !== 'undefined') ? explosions : [],
     // Le boss : sa position et sa vie, pour qu'il soit localisable en
     // perspective. `_state` est l'introspection officielle du module boss.
-    boss: (typeof BOSS !== 'undefined' && BOSS && BOSS.isActive && BOSS.isActive())
-      ? {
-          x: BOSS._state ? BOSS._state.x : CANVAS_WIDTH / 2,
-          y: BOSS._state ? BOSS._state.y : 120,
-          rayon: BOSS._state && BOSS._state.rayon ? BOSS._state.rayon : 90,
-          hp: (typeof BOSS.getHpFraction === 'function') ? BOSS.getHpFraction() : 1,
-          color: (typeof BOSS.getColor === 'function') ? BOSS.getColor() : null,
-          phase: (typeof BOSS.getPhase === 'function') ? BOSS.getPhase() : 1
-        }
-      : null,
+    boss: bossViewSnapshot(),
     shipRenderer: (typeof player !== 'undefined' && player && player.shipRenderer)
       ? player.shipRenderer : 'legacy-vector'
   };
@@ -1351,17 +1373,26 @@ function drawStagePerspective() {
     ctx.save();
     place(ctx);
     const cle = boss.color || 'enemyElite';
-    // Deux cercles concentriques : la silhouette, puis la part de vie restante.
-    NEON.ring(ctx, boss.x, boss.y, boss.r, 1.6, cle,
-      { alpha: 0.42 * t, dash: [7, 5], passes: 2, composite: 'lighter' });
-    NEON.ring(ctx, boss.x, boss.y, boss.r * 0.82, 2.6, 'danger',
-      { alpha: 0.75 * t, passes: 3, composite: 'lighter' });
-    // La jauge suit le pourtour : lisible sans quitter l'action.
-    const arc = Math.max(0.02, boss.hp);
-    NEON.ring(ctx, boss.x, boss.y, boss.r * 1.12, 2.2, 'playerCore',
-      { alpha: 0.6 * t, dash: [arc * 160, 999], dashOffset: -40, passes: 2, composite: 'lighter' });
-    NEON.dot(ctx, boss.x, boss.y, Math.max(3, boss.r * 0.14), cle,
-      { alpha: 0.85 * t, glowScale: 0.5, passes: 2 });
+    if (boss.shell) {
+      // La coque 3D est affichée : on n'ajoute QUE la jauge de vie, sinon les
+      // cercles se battraient avec elle. Le pourtour suffit à lire la vie.
+      const arc = Math.max(0.02, boss.hp);
+      NEON.ring(ctx, boss.x, boss.y, boss.r * 1.12, 2.4, 'danger',
+        { alpha: 0.34 * t, passes: 2, composite: 'lighter' });
+      NEON.ring(ctx, boss.x, boss.y, boss.r * 1.12, 2.6, 'playerCore',
+        { alpha: 0.7 * t, dash: [arc * 160, 999], dashOffset: -40, passes: 3, composite: 'lighter' });
+    } else {
+      // Sans coque, il faut au moins une silhouette lisible.
+      NEON.ring(ctx, boss.x, boss.y, boss.r, 1.6, cle,
+        { alpha: 0.42 * t, dash: [7, 5], passes: 2, composite: 'lighter' });
+      NEON.ring(ctx, boss.x, boss.y, boss.r * 0.82, 2.6, 'danger',
+        { alpha: 0.75 * t, passes: 3, composite: 'lighter' });
+      const arc = Math.max(0.02, boss.hp);
+      NEON.ring(ctx, boss.x, boss.y, boss.r * 1.12, 2.2, 'playerCore',
+        { alpha: 0.6 * t, dash: [arc * 160, 999], dashOffset: -40, passes: 2, composite: 'lighter' });
+      NEON.dot(ctx, boss.x, boss.y, Math.max(3, boss.r * 0.14), cle,
+        { alpha: 0.85 * t, glowScale: 0.5, passes: 2 });
+    }
     ctx.restore();
   }
 
