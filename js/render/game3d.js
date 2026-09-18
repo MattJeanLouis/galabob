@@ -23,6 +23,7 @@ const GAME3D = (() => {
   const MAX_ENEMIES = 48;
   const MAX_SHOTS = 160;
   const MAX_ENEMY_SHOTS = 96;
+  const MAX_FX = 64;
 
   // --- placement de la caméra ------------------------------------------------
   // La caméra se place AU-DESSUS de la position du vaisseau dans le plan :
@@ -37,6 +38,13 @@ const GAME3D = (() => {
   const CAM_ROLL = 0.10;           // inclinaison du cadre quand on vire
   const FOV = 44;
   const HORIZON = 6000;            // distance du plan de fond
+
+  // Ciel : l'astre du jeu, posé loin derrière, rafraîchi une frame sur N.
+  const SKY_DISTANCE = 4200;
+  const SKY_W = 640;
+  const SKY_H = 320;
+  const SKY_SPAN = 12000;
+  const SKY_EVERY = 3;
 
 
   // Le sol ne s'étend que sur la zone réellement survolée : un plan plus large
@@ -58,6 +66,8 @@ const GAME3D = (() => {
   let camera = null;
   let ground = null;
   let sky = null;
+  let skyTexture = null;
+  let skyFrame = -999;
   let failed = false;
   let failureReason = null;
   let available = false;
@@ -196,14 +206,56 @@ const GAME3D = (() => {
     // ressortir les vaisseaux — et c'est l'ambiance du mode 2D.
   }
 
-  /** CIEL : pas encore en place, et c'est un manque assumé.
-   *  L'objectif demande « le même ciel » que la vue à plat. La bonne matière
-   *  existe — `SPACE3D.frame()` rend la planète filaire du jeu — mais elle
-   *  attend des paramètres de placement (`x`, `y`, `radius`) que `backdrop.js`
-   *  calcule pour SA mise en page. Sans eux l'astre ne se dessine pas : plutôt
-   *  qu'un plan vide, on n'ajoute rien tant que le placement n'est pas réglé.
-   *  Tant qu'il manque, la vue en perspective a un fond sombre uni. */
-  function buildSky() { sky = null; }
+  /** Le CIEL de la vue en perspective : la planète filaire du jeu.
+   *  C'est le MÊME astre que celui du décor 2D (`SPACE3D`, déjà utilisé par
+   *  `backdrop.js`), donc la même ambiance sous un autre angle — au lieu d'un
+   *  fond inventé. `SPACE3D.frame()` attend `x`, `y` et `radius` en PIXELS de
+   *  la toile : sans eux l'astre ne se dessinait pas (essayé, capturé,
+   *  invisible — c'est ce qui manquait). */
+  function buildSky() {
+    if (typeof window.SPACE3D === 'undefined' || typeof window.SPACE3D.frame !== 'function') {
+      sky = null;
+      return;
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = SKY_W; canvas.height = SKY_H;
+    skyTexture = textureFrom(canvas);
+    const mesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(1, 1),
+      new THREE.MeshBasicMaterial({
+        map: skyTexture, transparent: true, depthWrite: false, depthTest: false,
+        toneMapped: false
+      })
+    );
+    mesh.position.set(0, 0, -SKY_DISTANCE);
+    mesh.scale.set(SKY_SPAN, SKY_SPAN * (SKY_H / SKY_W), 1);
+    mesh.renderOrder = -20;
+    scene.add(mesh);
+    sky = mesh;
+  }
+
+  /** Redemande une image d'astre au jeu, une frame sur N (il tourne lentement). */
+  function refreshSky() {
+    if (!sky || !skyTexture) return;
+    const frameId = (typeof FRAME !== 'undefined' && FRAME) ? (FRAME.frame | 0) : 0;
+    if (frameId - skyFrame < SKY_EVERY) return;
+    skyFrame = frameId;
+    try {
+      const theme = (typeof BACKDROP !== 'undefined' && BACKDROP && BACKDROP.themeIndex)
+        ? BACKDROP.themeIndex() : 0;
+      const image = window.SPACE3D.frame({
+        width: SKY_W, height: SKY_H, themeIndex: theme,
+        // L'astre occupe le centre haut de la toile, à bonne taille.
+        x: SKY_W * 0.5, y: SKY_H * 0.42, radius: SKY_H * 0.40
+      });
+      if (!image) return;
+      const cible = skyTexture.image;
+      if (cible && cible.getContext) {
+        cible.getContext('2d').drawImage(image, 0, 0, SKY_W, SKY_H);
+        skyTexture.needsUpdate = true;
+      }
+    } catch (e) { /* le ciel ne doit jamais casser la vue */ }
+  }
 
   function init() {
     if (available) return true;
@@ -337,6 +389,9 @@ const GAME3D = (() => {
     camRoll += ((lagX / Math.max(200, w * 0.35)) * CAM_ROLL - camRoll) * 0.12;
     camera.position.set(camX, camHeight, pz + camBack);
     const lookX = camX + lagX * 0.35;
+    // L'astre reste à distance fixe et suit le cadre : c'est un vrai fond.
+    if (sky) sky.position.set(camX, camHeight * 0.5, pz - SKY_DISTANCE);
+    refreshSky();
     camera.up.set(Math.sin(camRoll), Math.cos(camRoll), 0);
     camera.lookAt(lookX, 30, pz - h * 0.26);
 
@@ -447,12 +502,35 @@ const GAME3D = (() => {
       });
     }
 
+    // --- explosions : les impacts doivent se voir là où ils ont lieu --------
+    // On ne projette que les particules qui PORTENT l'événement (flash, onde) :
+    // les étincelles, nombreuses et minuscules, ne se liraient pas.
+    const fx = snapshot.explosions || [];
+    const explosionMarkers = [];
+    for (let i = 0; i < fx.length && explosionMarkers.length < MAX_FX; i++) {
+      const p = fx[i];
+      if (!p || p.alive === false || !(p.life > 0) || !(p.r > 2)) continue;
+      const cx = planeX(p.x), cz = planeZ(p.y);
+      const centre = toScreen(cx, 0);
+      aim.set(cx, 0, cz + 40).project(camera);
+      const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
+      const grossissement = Math.hypot(proche.x - centre.x, proche.y - centre.y) / 40;
+      const part = Math.max(0, Math.min(1, p.life / Math.max(1, p.maxLife)));
+      explosionMarkers.push({
+        x: centre.x, y: centre.y,
+        r: p.r * grossissement,
+        alpha: Math.max(0, Math.min(1, (p.alpha == null ? 1 : p.alpha) * part)),
+        color: p.col || null
+      });
+    }
+
     return {
       canvas: renderer.domElement,
       markers: {
         ship: { x: shipMarker.x, y: shipMarker.y, visible: true },
         enemies: enemyMarkers,
-        powerups: powerupMarkers
+        powerups: powerupMarkers,
+        explosions: explosionMarkers
       }
     };
   }

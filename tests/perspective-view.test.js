@@ -75,6 +75,27 @@ test('le point de vue est mémorisé et restauré', () => {
   assert.match(profile, /setViewMode\(mode\)/, 'le profil doit exposer un setter');
 });
 
+test('les éléments de jeu à voir sont projetés : bonus et explosions', () => {
+  const module3d = read('js/render/game3d.js');
+  for (const marqueur of ['enemies', 'powerups', 'explosions', 'ship']) {
+    assert.match(module3d, new RegExp(marqueur + ':'), `le marqueur « ${marqueur} » doit être projeté`);
+  }
+
+  const game = read('js/game.js');
+  // Chaque marqueur doit être TRACÉ, sinon le calcul ne sert à rien.
+  assert.match(game, /result\.markers && result\.markers\.powerups/, 'les bonus doivent être tracés');
+  assert.match(game, /result\.markers && result\.markers\.explosions/, 'les explosions doivent être tracées');
+
+  // Et l'instantané doit transporter les sources correspondantes.
+  const snapshot = read('js/game.js').slice(
+    read('js/game.js').indexOf('function stageSnapshot()'),
+    read('js/game.js').indexOf('/** Compose la vue en perspective')
+  );
+  for (const champ of ['enemyBullets', 'powerUps', 'explosions']) {
+    assert.ok(snapshot.includes(champ + ':'), `l’instantané doit porter ${champ}`);
+  }
+});
+
 test('le rendu 3D entre dans le même pipeline néon que la vue à plat', () => {
   const game = read('js/game.js');
   const draw = game.slice(

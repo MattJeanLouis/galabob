@@ -1291,6 +1291,9 @@ function stageSnapshot() {
     // Les bonus doivent rester identifiables : sans eux, on ne sait pas quoi
     // aller chercher en perspective.
     powerUps: (typeof powerUps !== 'undefined' && powerUps) ? powerUps : [],
+    // Les impacts doivent se produire LÀ OÙ ils ont lieu : sans eux, une
+    // destruction lointaine ne se lisait pas.
+    explosions: (typeof explosions !== 'undefined') ? explosions : [],
     shipRenderer: (typeof player !== 'undefined' && player && player.shipRenderer)
       ? player.shipRenderer : 'legacy-vector'
   };
@@ -1327,6 +1330,24 @@ function drawStagePerspective() {
   place(ctx);
   ctx.drawImage(result.canvas, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   ctx.restore();
+
+  // --- EXPLOSIONS : les impacts se produisent LÀ OÙ ils ont lieu -----------
+  // Même grammaire que la vue à plat (halo additif), mais à la position
+  // projetée : une destruction lointaine se lit enfin.
+  const impacts = (result.markers && result.markers.explosions) || [];
+  if (impacts.length && typeof NEON !== 'undefined') {
+    ctx.save();
+    place(ctx);
+    for (const f of impacts) {
+      const rayon = Math.max(3, Math.min(90, f.r || 4));
+      const couleur = f.color || 'enemyNormal';
+      NEON.dot(ctx, f.x, f.y, rayon * 0.5, couleur,
+        { alpha: 0.55 * f.alpha * t, glowScale: 0.9, passes: 2, composite: 'lighter' });
+      NEON.ring(ctx, f.x, f.y, rayon, Math.max(1, rayon * 0.12), couleur,
+        { alpha: 0.5 * f.alpha * t, passes: 2, composite: 'lighter' });
+    }
+    ctx.restore();
+  }
 
   // --- BONUS : même grammaire que la vue à plat, projetée -------------------
   // Le sprite 3D n'existe pas pour les bonus : on les trace en néon à leur
