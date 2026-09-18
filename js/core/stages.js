@@ -923,6 +923,14 @@ function _trIndex(key) {
  *  6. LE SYSTÈME DE STAGES
  * ========================================================================== */
 
+/** Purge l'onde de choc d'une bombe encore active.
+ *  Sa durée de vie (720 ms) dépasse largement le délai de fin de stage : sans
+ *  cette purge, l'onde du stage précédent balayait les ennemis du stage suivant
+ *  dès leur apparition et soldait le stage sans que le joueur ait joué. */
+function resetStageBlast() {
+  if (typeof bombWaves !== 'undefined' && bombWaves) bombWaves.length = 0;
+}
+
 const stageSystem = {
   currentStage: 1,
   maxStage: PROGRESSION.MAX_STAGE,        // 20 (était 10)
@@ -1057,6 +1065,10 @@ const stageSystem = {
       enemyBullets = [];
       explosions = [];
       powerUps = [];
+
+      // Aucun effet hérité du stage précédent ne doit pouvoir le solder :
+      // l'onde de choc d'une bombe est purgée ici, à chaque entrée de stage.
+      resetStageBlast();
 
       this.resetStageStats();
 

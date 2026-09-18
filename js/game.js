@@ -18,6 +18,8 @@ let assaultShopFireArmed = true; // exige un relâchement après le dernier kill
 
 // Minuterie de fin de stage (en ms de temps de jeu, remplace un setTimeout)
 let pendingTransitionMs = -1;
+// Fenêtre de ramassage des bonus de fin de stage (ms de temps de jeu)
+let pendingCollectMs = -1;
 let sectorTransitPending = false;
 let sectorTransitPreview = false;
 let environmentalHazardTimer = 16000;
@@ -280,6 +282,7 @@ function initGame() {
   if (typeof scorePopups !== 'undefined') scorePopups = [];
 
   pendingTransitionMs = -1;
+  pendingCollectMs = -1;
   sectorTransitPending = false;
   sectorTransitPreview = false;
   environmentalHazardTimer = 16000;
@@ -378,7 +381,23 @@ function update(deltaTime) {
       return;
     }
 
+    // Fenêtre de ramassage de fin de stage : les bonus en l'air sont aimantés
+    // vers le joueur, et la suite du flux (transition ou stage suivant)
+    // n'est lancée qu'une fois le champ ramassé — ou la fenêtre écoulée.
+    if (pendingCollectMs >= 0) {
+      pendingCollectMs -= deltaTime;
+      if (pendingCollectMs <= 0 || !isPowerUpCollectionActive()) {
+        pendingCollectMs = -1;
+        completePowerUpCollection();
+      }
+    }
+
     // Minuterie de fin de stage (remplace l'ancien setTimeout)
+    if (pendingTransitionMs >= 0 && consumePowerUpCollection()) {
+      // Le ramassage vient de se terminer : on repart sur le délai normal pour
+      // que l'écran de transition s'affiche réellement après les bonus.
+      pendingTransitionMs = TEMPO.STAGE_COMPLETE_DELAY_MS;
+    }
     if (pendingTransitionMs >= 0) {
       pendingTransitionMs -= deltaTime;
       if (pendingTransitionMs <= 0) {
@@ -709,6 +728,8 @@ function returnToMenu() {
   isPaused = false;
   autoPaused = false;
   pendingTransitionMs = -1;
+  pendingCollectMs = -1;
+  resetPowerUpCollection();
   sectorTransitPending = false;
   sectorTransitPreview = false;
   stageSystem.transitionActive = false;
@@ -847,6 +868,11 @@ function handleStageCompletion() {
       if (enemies[i]) enemies[i].isDeleted = true;
     }
 
+    // L'onde de choc d'une bombe ne franchit JAMAIS un stage : sa durée de vie
+    // (720 ms) dépasse le délai de fin de stage, et elle soldait sinon le stage
+    // suivant en effaçant ses ennemis dès leur apparition.
+    resetStageBlast();
+
     JUICE.preset('stageClear');
     gameEvent('stageClear', { stage: stageSystem.currentStage });
     const modeResult = _modeCall('completeStage', {
@@ -874,11 +900,16 @@ function handleStageCompletion() {
       // projectiles continuent. Seule la menace de combat est absente.
       isPaused = false;
       pendingTransitionMs = -1;
+      pendingCollectMs = -1;
       return;
     }
 
     // Minuterie en temps de JEU, pas un setTimeout : plus de dérive au retour d'onglet.
     pendingTransitionMs = TEMPO.STAGE_COMPLETE_DELAY_MS;
+    // Avant de passer au stage suivant, on laisse le joueur ramasser ce qui
+    // traînait : les bonus sont aimantés vers lui, puis la transition démarre.
+    pendingCollectMs = TEMPO.STAGE_COLLECT_MS;
+    beginPowerUpCollection();
   } catch (e) {
     console.error("Erreur dans handleStageCompletion :", e);
     softResetStage();

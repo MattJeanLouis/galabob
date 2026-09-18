@@ -230,6 +230,40 @@ function createPowerUp(x, y, forcedType) {
 /* =============================================================================
  *  4. MISE À JOUR
  * ========================================================================== */
+/* =============================================================================
+ *  5 bis. RAMASSAGE DE FIN DE STAGE
+ * -----------------------------------------------------------------------------
+ *  Quand un stage se termine, les bonus encore en l'air sont aimantés vers le
+ *  joueur au lieu d'être effacés par le stage suivant. Le champ est donc vidé
+ *  par le joueur, pas par le changement de stage : rien n'est perdu.
+ * ========================================================================== */
+/** État du ramassage : 0 = inactif, 1 = en cours, 2 = terminé (à consommer). */
+let powerUpCollectPhase = 0;
+
+/** Ouvre la fenêtre de ramassage. Idempotent : un rappel ne la relance pas. */
+function beginPowerUpCollection() {
+  powerUpCollectPhase = 1;
+  try { JUICE.preset('powerUp', 0.35); } catch (e) { /* retour facultatif */ }
+}
+
+/** Le ramassage est-il encore en cours ? (lu par la boucle de jeu) */
+function isPowerUpCollectionActive() { return powerUpCollectPhase === 1; }
+
+/** Ferme la fenêtre (fin naturelle ou ramassage complet). Idempotent. */
+function completePowerUpCollection() {
+  if (powerUpCollectPhase === 1) powerUpCollectPhase = 2;
+}
+
+/** À consommer UNE fois par la boucle : vrai si la fenêtre vient de se fermer. */
+function consumePowerUpCollection() {
+  if (powerUpCollectPhase !== 2) return false;
+  powerUpCollectPhase = 0;
+  return true;
+}
+
+/** Annule la fenêtre (nouvelle partie, retour au menu). */
+function resetPowerUpCollection() { powerUpCollectPhase = 0; }
+
 function updatePowerUps(deltaTime) {
   try {
     ensurePowerUpBridges();
@@ -244,7 +278,11 @@ function updatePowerUps(deltaTime) {
     // Portée et force d'attraction : l'AIMANT les fait exploser (player.js).
     const range = (typeof playerMagnetRange === 'function') ? playerMagnetRange() : 120;
     const pull = (typeof playerMagnetPull === 'function') ? playerMagnetPull() : 1400;
-    const range2 = range * range;
+    // Ramassage de fin de stage : attraction totale, depuis n'importe où, et
+    // sans le plancher de chute qui empêchait de remonter un bonus.
+    const collecting = powerUpCollectPhase === 1;
+    const range2 = collecting ? Infinity : range * range;
+    const pullForce = collecting ? Math.max(pull, 9000) : pull;
 
     for (let i = powerUps.length - 1; i >= 0; i--) {
       const p = powerUps[i];
@@ -274,12 +312,12 @@ function updatePowerUps(deltaTime) {
 
       if (p.magnet) {
         const d = Math.sqrt(d2) || 1;
-        p.vx += (dx / d) * pull * dt;
-        p.vy += (dy / d) * pull * dt;
+        p.vx += (dx / d) * pullForce * dt;
+        p.vy += (dy / d) * pullForce * dt;
         // frein visqueux : la course reste lisible au lieu d'osciller
-        const k = Math.pow(0.02, dt);
+        const k = Math.pow(collecting ? 0.12 : 0.02, dt);
         p.vx *= k; p.vy *= k;
-        p.vy = Math.max(p.vy, TEMPO.POWERUP_FALL_SPEED * 0.4);
+        if (!collecting) p.vy = Math.max(p.vy, TEMPO.POWERUP_FALL_SPEED * 0.4);
       } else {
         p.vx = damp(p.vx, 0, Math.pow(0.05, 4), dt);
         p.vy = damp(p.vy, TEMPO.POWERUP_FALL_SPEED, Math.pow(0.05, 3), dt);
@@ -355,7 +393,17 @@ function applyPowerUp(type, x, y) {
     case 'weapon': {
       const dur = def.duration || TEMPO.POWERUP_DURATION_MS;
       if (typeof setPlayerWeapon === 'function') {
+        player.weaponEvicted = null;
         label = setPlayerWeapon(def.key, dur);
+        // Le plafond d'arsenal est un choix, pas une perte silencieuse : on dit
+        // clairement quelle arme cède la place.
+        const evincee = player.weaponEvicted;
+        player.weaponEvicted = null;
+        if (evincee && typeof hudAlert === 'function') {
+          const nom = (typeof PLAYER_WEAPON_LABELS === 'object' && PLAYER_WEAPON_LABELS[evincee])
+            ? PLAYER_WEAPON_LABELS[evincee] : String(evincee).toUpperCase();
+          hudAlert(nom + ' CÈDE LA PLACE', 'ARSENAL COMPLET · ' + (TEMPO.PLAYER_WEAPON_LIMIT || 3) + ' ARMES MAX', '#7df9ff', 1500);
+        }
       } else {                                   // repli défensif
         player.weapon = def.key;
         player.weaponTimer = dur;

@@ -83,7 +83,8 @@ const player = {
   // sa propre minuterie : ramasser un spread n'éteint plus le laser, les deux
   // tirent ensemble. `weapon` / `weaponLevel` / `weaponTimer` continuent de
   // désigner la plus récente, pour le HUD et la cadence — rien n'est cassé.
-  weapons: {},                    // { type: { level: 1..3, timer: ms } }
+  weapons: {},                    // { type: { level: 1..3, timer: ms, order } }
+  weaponSeq: 0,                   // rang d'acquisition : sert au plafond d'armes
 
   /* --- EMPLACEMENT 2 : BOUCLIER (charges, s'ajoute) --- */
   shield: 0,                      // nombre de charges restantes (0..3)
@@ -218,32 +219,74 @@ function isPlayerWeapon(type) {
   return PLAYER_WEAPONS.indexOf(type) >= 0;
 }
 
-/** Équipe une arme. Le MÊME type fait monter le niveau (1..3), un AUTRE type
- *  remplace l'arme en conservant le niveau acquis.
+/** L'arme la plus ancienne encore équipée (par ordre d'acquisition). */
+function oldestPlayerWeapon() {
+  let plusVieille = null, rang = Infinity;
+  for (const type in player.weapons) {
+    const arme = player.weapons[type];
+    if (!arme) continue;
+    const ordre = arme.order == null ? 0 : arme.order;    // 0 = la plus ancienne
+    if (ordre < rang) { rang = ordre; plusVieille = type; }
+  }
+  return plusVieille;
+}
+
+/** Applique le plafond d'armes simultanées (TEMPO.PLAYER_WEAPON_LIMIT).
+ *  L'arme ÉVINCÉE est renvoyée, ou null si rien n'a été retiré. */
+function prunePlayerWeapons() {
+  const limite = Math.max(1, Number(TEMPO.PLAYER_WEAPON_LIMIT) || 1);
+  if (!player.weapons) return null;
+  let evincee = null;
+  let garde = false;
+  while (Object.keys(player.weapons).length > limite) {
+    const plusVieille = oldestPlayerWeapon();
+    if (!plusVieille) break;
+    delete player.weapons[plusVieille];
+    // L'arme évincée peut être celle que le HUD suit : on le signale au plus
+    // proche appelant, qui l'annonce (« SPREAD CÈDE LA PLACE »).
+    if (!garde) { evincee = plusVieille; garde = true; }
+  }
+  return evincee;
+}
+
+/** Équipe une arme. Le MÊME type fait monter le niveau (1..3) ; un AUTRE type
+ *  s'ajoute TANT QUE le plafond d'armes n'est pas atteint. Au-delà, la plus
+ *  ancienne cède la place : c'est un choix, pas une accumulation sans fin.
  *  @returns {string} libellé prêt à afficher */
 function setPlayerWeapon(type, durationMs) {
   if (!isPlayerWeapon(type) || type === 'normal') return PLAYER_WEAPON_LABELS.normal;
-  const lvl = clamp(player.weaponLevel | 0, 1, 3);
 
   const duree = durationMs == null ? TEMPO.POWERUP_DURATION_MS : durationMs;
   if (!player.weapons) player.weapons = {};
 
-  // Le MÊME type monte d'un niveau ; un AUTRE type s'AJOUTE au lieu de
-  // remplacer. Chaque arme garde sa minuterie propre, ce qui récompense la
-  // collecte : tout ramassage apporte quelque chose.
+  // Le MÊME type monte d'un niveau et relance sa minuterie ; un AUTRE type
+  // s'ajoute avec un rang d'acquisition plus récent.
   const dejaLa = player.weapons[type];
   if (dejaLa) {
     dejaLa.level = Math.min(3, (dejaLa.level | 0) + 1);
     dejaLa.timer = Math.max(dejaLa.timer, duree);
+    dejaLa.order = ++player.weaponSeq;
   } else {
-    player.weapons[type] = { level: 1, timer: duree };
+    player.weapons[type] = { level: 1, timer: duree, order: ++player.weaponSeq };
   }
 
-  // `weapon` suit la plus récente : c'est elle qui donne la cadence et le HUD.
-  player.weapon = type;
-  player.weaponLevel = player.weapons[type].level;
-  player.weaponTimer = player.weapons[type].timer;
+  const evincee = prunePlayerWeapons();
+
+  // `weapon` suit la plus récente : c'est elle qui donne le HUD.
+  if (player.weapons[type]) {
+    player.weapon = type;
+    player.weaponLevel = player.weapons[type].level;
+    player.weaponTimer = player.weapons[type].timer;
+  } else if (evincee === type) {
+    // Cas limite (plafond à 1) : la nouvelle venue est aussitôt évincée.
+    player.weapon = oldestPlayerWeapon();
+  }
   player.fireCooldown = 0;          // l'arme est prête tout de suite
+
+  // L'éviction est un événement de gameplay : le libellé standard reste pour la
+  // bulle de ramassage, et `player.weaponEvicted` permet à l'appelant de
+  // l'annoncer en bannière au lieu de la cacher dans un texte de trois mots.
+  player.weaponEvicted = evincee;
   return getPlayerWeaponLabel();
 }
 
@@ -372,6 +415,7 @@ function resetPlayerPowerState() {
   player.weaponTimer = 0;
   player.weaponLevel = 1;
   player.weapons = {};
+  player.weaponSeq = 0;
   player.shield = 0;
   player.shieldPulse = 0;
   player.shieldBreak = 0;
@@ -526,28 +570,74 @@ function _playerGameMode() {
   return runtime && runtime.modes ? runtime.modes.current() : null;
 }
 
-function _playerDamageMultiplier() {
-  const mode = _playerGameMode();
-  return mode && typeof mode.damageMultiplier === 'function'
-    ? Math.max(0.05, Number(mode.damageMultiplier()) || 1)
-    : 1;
+/** Dilution de l'arsenal, lue par TOUS les dégâts du joueur.
+ *  Le cumul d'armes ne doit pas se multiplier : le facteur est normalisé sur le
+ *  NOMBRE d'armes actives, jamais sur leur ordre d'acquisition. Une arme seule
+ *  reste donc à 100 % (la trouvaille garde tout son effet), deux armes valent
+ *  ~1,4× un canon nu, trois ~1,8×. Voir le pourquoi chiffré dans config.js. */
+function _playerArsenalScale() {
+  const n = playerActiveWeapons().length;
+  if (n <= 1) return 1;
+  const pas = Number(TEMPO.PLAYER_WEAPON_SCALE);
+  const scale = (Number.isFinite(pas) && pas >= 0) ? pas : 0.4;
+  // Plancher : une arme ne doit jamais être annulée par la dilution.
+  return Math.max(0.25, n / (1 + (n - 1) * scale));
 }
 
-/** Cadence courante en ms : arme, niveau et SURCHARGE compris. */
-function currentFireInterval() {
-  const w = player.weapon;
+/** Dégâts sortants : coefficient du mode (ex. Assaut) × dilution d'arsenal. */
+function _playerDamageMultiplier() {
+  const mode = _playerGameMode();
+  const modeScale = mode && typeof mode.damageMultiplier === 'function'
+    ? Math.max(0.05, Number(mode.damageMultiplier()) || 1)
+    : 1;
+  return modeScale * _playerArsenalScale();
+}
+
+/** Cadence d'UNE arme, en ms (base par type, niveau, bonus et mode compris).
+ *  La SURCHARGE et la FURIE sont appliquées par l'appelant, une seule fois. */
+function _weaponBaseInterval(type) {
+  const w = type;
   let base;
   if (w === 'double') base = TEMPO.PLAYER_FIRE_INTERVAL_DOUBLE;
   else if (w === 'spread') base = TEMPO.PLAYER_FIRE_INTERVAL_SPREAD;
   else if (PLAYER_WEAPON_INTERVAL[w] != null) base = PLAYER_WEAPON_INTERVAL[w];
   else base = TEMPO.PLAYER_FIRE_INTERVAL;
-
   const lvl = clamp(player.weaponLevel | 0, 1, 3);
-  let ms = base * (1 - 0.09 * (lvl - 1));
+  const ms = base * (1 - 0.09 * (lvl - 1));
   const shipFireRate = player.shipStats ? Number(player.shipStats.fireRateMultiplier) || 1 : 1;
-  ms /= shipFireRate;
-  if (playerHasMod('surcharge')) ms *= PLAYER_SURCHARGE_RATE;
-  if (playerHasMod('furie')) ms *= 0.72;
+  return ms / shipFireRate;
+}
+
+/** Cadence courante en ms.
+ *  Elle n'est plus dictée par la DERNIÈRE arme ramassée mais par l'ARSENAL :
+ *  on moyenne les armes actives. Sans cela, ramasser un missiles (290 ms) après
+ *  un double (125 ms) faisait BAISSER les dégâts — un ramassage ne doit jamais
+ *  punir. Une arme seule garde exactement sa cadence d'origine. */
+function currentFireInterval() {
+  const actives = playerActiveWeapons();
+  const savW = player.weapon, savL = player.weaponLevel;
+  let ms;
+  try {
+    let base;
+    if (actives.length === 0) {
+      base = _weaponBaseInterval(player.weapon);
+    } else {
+      let total = 0;
+      for (let i = 0; i < actives.length; i++) {
+        player.weapon = actives[i].type;
+        player.weaponLevel = actives[i].level;
+        total += _weaponBaseInterval(actives[i].type);
+      }
+      base = total / actives.length;
+    }
+    ms = base;
+    if (playerHasMod('surcharge')) ms *= PLAYER_SURCHARGE_RATE;
+    if (playerHasMod('furie')) ms *= 0.72;
+  } finally {
+    // `player.weapon` est un état partagé (HUD, mode) : on le restaure toujours.
+    player.weapon = savW;
+    player.weaponLevel = savL;
+  }
   const mode = _playerGameMode();
   if (mode && typeof mode.adjustFireInterval === 'function') {
     ms = mode.adjustFireInterval(ms, player.weapon);
@@ -969,7 +1059,7 @@ function updatePlayerLaser(deltaTime, dt) {
   const lvl = clamp(player.weaponLevel | 0, 1, 3);
   const hw = _laserHalfWidth();
   const noseY = player.y - 2;
-  const dps = LASER_DPS[lvl - 1] * (playerHasMod('surcharge') ? 1.55 : 1) * L.power;
+  const dps = LASER_DPS[lvl - 1] * (playerHasMod('surcharge') ? 1.55 : 1) * _playerDamageMultiplier() * L.power;
 
   // Dégâts appliqués par paliers de 60 ms : à 60 fps ça reste continu, mais
   // le nombre d'éclats d'impact ne dépend plus du framerate.

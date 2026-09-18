@@ -6,6 +6,12 @@ const TRANSIT = (function () {
   'use strict';
 
   const ROUTE_END = 22000;
+  // Objectif unique de la poursuite : un quota d'appareils détruits. Il n'y a
+  // plus de cibles prioritaires à abattre, donc plus aucun verrou invisible :
+  // la route qui s'achève suffit, et le saut part dès le quota atteint.
+  // Seize éliminations tombent pendant la traversée (~54 s) au canon nu et
+  // bien avant avec une arme ramassée : la sortie n'est jamais une attente.
+  const KILL_TARGET = 16;
   const REDUCED_MOTION = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
   const LANE_X = 42;
   const LANE_Y = 25;
@@ -22,6 +28,10 @@ const TRANSIT = (function () {
   function cl(v, a, b) { return v < a ? a : (v > b ? b : v); }
   function damp(a, b, rate, dt) { return b + (a - b) * Math.pow(rate, dt); }
   function dist(a, b) { return Math.hypot(a.x - b.x, a.y - b.y, a.z - b.z); }
+  /** Ligne d'objectif du HUD : la seule condition de sortie de la mission. */
+  function objectiveText() { return 'POURSUITE · ' + Math.min(S.kills, KILL_TARGET) + '/' + KILL_TARGET + ' ÉLIMINÉS'; }
+  /** La sortie ne dépend que des ennemis abattus et de la fin de la route. */
+  function escapeReady() { return S.route.distance >= ROUTE_END && S.kills >= KILL_TARGET; }
   function seeded(seed) {
     let value = (seed | 0) || 1;
     return function () { value += 0x6d2b79f5; let t = value; t = Math.imul(t ^ t >>> 15, t | 1); t ^= t + Math.imul(t ^ t >>> 7, t | 61); return ((t ^ t >>> 14) >>> 0) / 4294967296; };
@@ -72,16 +82,18 @@ const TRANSIT = (function () {
     S.t += dt; S.messageT = Math.max(0, S.messageT - dt); S.ship.invuln = Math.max(0, S.ship.invuln - dt);
     const threatDt = dt * (window.playerTimeScale?.() || 1);
     updateRoute(dt); updatePlayer(dt); updateWeapons(deltaMs, dt); updateEnemies(threatDt); updateScenery(dt); updatePowerups(dt); chooseTarget();
-    if (S.route.distance >= ROUTE_END && S.eliteKills >= 3 && S.phase !== 'jump') {
-      S.phase = 'jump'; S.jumpT = 0; S.message = 'TRAJECTOIRE VERROUILLÉE · SAUT'; S.messageT = 2;
+    if (escapeReady() && S.phase !== 'jump') {
+      S.phase = 'jump'; S.jumpT = 0; S.message = 'OBJECTIF ATTEINT · SAUT'; S.messageT = 2;
       try { gameEvent?.('stageClear', { stage: 'transit-pursuit' }); } catch (_) { /* audio */ }
     }
     if (S.phase === 'jump') {
       S.jumpT += dt;
       if (S.jumpT > 2.15) S.complete = true;
-    } else if (S.route.distance >= ROUTE_END && S.eliteKills < 3) {
-      S.phase = 'finale'; S.message = 'POURSUITE MAINTENUE · CIBLE PRIORITAIRE'; S.messageT = Math.max(S.messageT, 0.2);
-      if (!S.enemies.some((e) => e.alive && e.elite)) spawnElite(S.eliteSpawned++);
+    } else if (S.route.distance >= ROUTE_END && !escapeReady()) {
+      // Quota non atteint : la route s'étire, mais elle reste finissable — les
+      // vagues normales continuent d'arriver, donc la sortie est toujours à
+      // portée de tir. Aucune cible obligatoire ne peut plus bloquer ici.
+      S.message = objectiveText() + ' · POURSUITE MAINTENUE'; S.messageT = Math.max(S.messageT, 0.2);
     }
   }
 
@@ -93,8 +105,7 @@ const TRANSIT = (function () {
   function updateRoute(dt) {
     const r = S.route;
     r.warp = warpAmount(r.distance);
-    const finale = r.distance >= ROUTE_END && S.eliteKills < 3;
-    const wanted = S.phase === 'jump' ? 1250 : finale ? 410 : 410 + r.warp * 700;
+    const wanted = S.phase === 'jump' ? 1250 : 410 + r.warp * 700;
     r.speed = damp(r.speed, wanted, S.phase === 'jump' ? 0.01 : 0.04, dt);
     r.distance += r.speed * dt;
     // Courbe entièrement scénarisée : grande orbite autour du premier astre,
@@ -166,12 +177,14 @@ const TRANSIT = (function () {
     }
   }
 
+  /** Les élites restent des appareils coriaces et bien payés, mais ils ne
+   *  conditionnent plus la sortie : ce ne sont plus des cibles obligatoires. */
   function spawnElite(index) {
     const x = [-34, 30, 0][index % 3], y = [-12, 15, -18][index % 3];
     S.enemies.push({ id: 900 + index, type: 'elite', elite: true, alive: true,
       hp: 14 + index * 3, hpMax: 14 + index * 3, x, y, baseX: x, baseY: y,
       z: -1250, holdZ: -285, age: 0, phase: index * 2.1, fire: 0.8, points: 750 });
-    S.message = 'CIBLE PRIORITAIRE EN VUE'; S.messageT = 2.2;
+    S.message = 'APPAREIL LOURD EN VUE'; S.messageT = 2.2;
   }
 
   function updateEnemies(dt) {
@@ -297,7 +310,7 @@ const TRANSIT = (function () {
     const customDrop = mode?.rollEnemyDrop?.({ enemy: e, roll, pick });
     if (customDrop) dropPowerup(e.x, e.y, e.z, e.id, customDrop);
     else if (customDrop === undefined && (e.elite || roll < 0.065)) dropPowerup(e.x, e.y, e.z, e.elite ? S.eliteKills : e.id);
-    if (e.elite) { S.message = 'CIBLE PRIORITAIRE ' + S.eliteKills + '/3 DÉTRUITE'; S.messageT = 2.4; }
+    if (e.elite) { S.message = objectiveText(); S.messageT = 2.0; }
   }
 
   function dropPowerup(x, y, z, seed, forcedType) {
@@ -499,7 +512,7 @@ const TRANSIT = (function () {
         { alpha: 0.34 + hazard.scale * 0.24, dash: [4, 7], dashOffset: S.t * 38, passes: 2 });
     }
     const progress = cl(S.route.distance / ROUTE_END, 0, 1), missionY = cl(H * 0.115, 82, 108), barW = cl(W * 0.24, 210, 340);
-    NEON.text(c, S.phase === 'jump' ? 'SAUT INTERSECTORIEL' : 'POURSUITE · CIBLES PRIORITAIRES  ' + S.eliteKills + '/3',
+    NEON.text(c, S.phase === 'jump' ? 'SAUT INTERSECTORIEL' : objectiveText(),
       W / 2, missionY, S.phase === 'jump' ? 'combo' : 'ui', { size: cl(W * 0.014, 14, 20), align: 'center', alpha: 0.9, glowScale: 0.4 });
     NEON.line(c, W / 2 - barW / 2, missionY + 17, W / 2 + barW / 2, missionY + 17, 'ui', 2, { alpha: 0.15, passes: 1 });
     NEON.line(c, W / 2 - barW / 2, missionY + 17, W / 2 - barW / 2 + barW * progress, missionY + 17, 'player', 2.6, { alpha: 0.78, passes: 3 });

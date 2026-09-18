@@ -65,6 +65,31 @@ const TEMPO = {
   PLAYER_FIRE_INTERVAL: 110,      // ms entre deux tirs (avant : 300 ms)
   PLAYER_FIRE_INTERVAL_DOUBLE: 125,
   PLAYER_FIRE_INTERVAL_SPREAD: 150,
+
+  /* ---------- ARSENAL : PLAFOND DE PUISSANCE ----------
+   *  Mesuré : les armes se cumulaient sans limite et chaque type gardait sa
+   *  pleine puissance. Six armes actives donnaient ×8,5 les dégâts d'un canon
+   *  nu, alors que les PV des boss sont calibrés sur `REGLAGES.dpsRef` = 8,5
+   *  (boss.js) : un boss de 40 s tombait en 5 s. L'écart venait moins de la
+   *  durée des bonus que de l'EMPILEMENT.
+   *
+   *  Deux garde-fous, tous deux réglables ici :
+   *    LIMIT  plafonne les armes simultanées ; l'ancienne cède la place.
+   *    SCALE  dilue la puissance de TOUT l'arsenal quand il s'étoffe, pour que
+   *           le gain total soit dégressif. Le facteur est normalisé sur le
+   *           nombre d'armes actives — jamais sur l'ordre de ramassage — sinon
+   *           prendre une arme lente après une rapide ferait BAISSER les dégâts.
+   *
+   *  Facteur total de l'arsenal = N / (1 + (N-1) × SCALE) :
+   *    1 arme  ×1,00   (une arme seule garde 100 % de sa puissance)
+   *    2 armes ×1,14
+   *    3 armes ×1,20
+   *  Avec les cadences moyennées, le plafond mesuré d'un arsenal complet
+   *  (3 armes + surcharge) retombe autour de ×3 un canon nu, au lieu de ×8,5 :
+   *  un boss de 40 s redevient une vingtaine de secondes au lieu de 5. */
+  PLAYER_WEAPON_LIMIT: 3,         // armes simultanées maximum
+  PLAYER_WEAPON_SCALE: 0.75,      // dilution de l'arsenal (voir la table ci-dessus)
+
   PLAYER_BULLET_SPEED: 1150,      // px/s (avant : 7 px/frame ≈ 420 px/s)
   PLAYER_BULLET_W: 3,             // px CSS
   PLAYER_BULLET_H: 16,            // px CSS
@@ -116,6 +141,10 @@ const TEMPO = {
   STAGE_TRANSITION_MS: 1600,      // avant : 5000 ms
   STAGE_INTRO_MS: 700,            // ms d'annonce du stage
   STAGE_COMPLETE_DELAY_MS: 120,   // avant : 300 ms
+  // Fenêtre de ramassage de fin de stage : les bonus encore en l'air sont
+  // aimantés vers le joueur avant l'écran de transition. Le stage suivant
+  // n'est lancé qu'après, et rien n'est perdu.
+  STAGE_COLLECT_MS: 1100,
   WAVE_SPAWN_DELAY_MS: 220,
   BOOT_DELAY_MS: 0,               // démarrage INSTANTANÉ — ne jamais remonter
 

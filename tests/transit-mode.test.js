@@ -68,21 +68,42 @@ test('les tirs ennemis restent des salves évitables', () => {
   assert.ok(maximum <= 7);
 });
 
-test('la route ne se termine qu’après les trois cibles prioritaires', () => {
+test('la route ne se termine qu’après le quota d’ennemis abattus', () => {
+  const source = readFileSync(new URL('../js/modes/transit.js', import.meta.url), 'utf8');
+  const target = Number(source.match(/const KILL_TARGET = (\d+)/)[1]);
+  assert.ok(target > 0, 'le quota doit être défini dans la source');
+
   const { transit } = runtime();
   transit.start({ stage: 10, nextStage: 11, mode: 'assault' });
   const state = transit.debug();
 
-  state.route.distance = 22000;
-  transit.update(16);
-  assert.equal(state.phase, 'finale');
-  assert.equal(transit.isComplete(), false);
+  // Un seul verrou : le nombre d'appareils détruits. Aucune cible prioritaire
+  // ne doit plus retenir la sortie.
+  assert.equal(state.kills, 0);
 
-  state.eliteKills = 3;
+  // On laisse la route atteindre son terme, puis on se place juste sous le
+  // quota : la poursuite doit se maintenir.
+  state.route.distance = 21999;
+  transit.update(16);
+  state.kills = target - 1;
+  transit.update(16);
+  assert.notEqual(state.phase, 'jump');
+  assert.equal(transit.isComplete(), false);
+  assert.match(state.message, /POURSUITE MAINTENUE/);
+  assert.doesNotMatch(state.message, /CIBLE PRIORITAIRE/);
+
+  // Le quota atteint, la sortie part immédiatement.
+  state.kills = target;
   transit.update(16);
   assert.equal(state.phase, 'jump');
+  assert.match(state.message, /OBJECTIF ATTEINT/);
   for (let i = 0; i < 140; i++) transit.update(16);
   assert.equal(transit.isComplete(), true);
+
+  // Le HUD ne doit plus jamais parler de cible prioritaire.
+  assert.doesNotMatch(source, /CIBLE PRIORITAIRE/);
+  assert.doesNotMatch(source, /CIBLES PRIORITAIRES/);
+  assert.match(source, /ÉLIMINÉS/);
 });
 
 test('reset interrompt proprement une mission', () => {
