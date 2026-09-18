@@ -382,11 +382,16 @@ function update(deltaTime) {
     }
 
     // Fenêtre de ramassage de fin de stage : les bonus en l'air sont aimantés
-    // vers le joueur, et la suite du flux (transition ou stage suivant)
-    // n'est lancée qu'une fois le champ ramassé — ou la fenêtre écoulée.
+    // vers le joueur. Elle ne peut se fermer que de DEUX façons, et jamais
+    // autrement : le champ est vide (tout est ramassé), ou le temps est écoulé.
+    // L'ancienne condition `!isPowerUpCollectionActive()` fermait la fenêtre
+    // dès la première frame si l'état du module n'était pas celui attendu —
+    // d'où une transition instantanée. Un test d'état ne doit jamais décider
+    // du flux : seul le ramassage réel compte.
     if (pendingCollectMs >= 0) {
       pendingCollectMs -= deltaTime;
-      if (pendingCollectMs <= 0 || !isPowerUpCollectionActive()) {
+      const champVide = (typeof powerUps === 'undefined' || !powerUps || powerUps.length === 0);
+      if (champVide || pendingCollectMs <= 0) {
         pendingCollectMs = -1;
         completePowerUpCollection();
       }

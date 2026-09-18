@@ -227,6 +227,29 @@ test('le ramassage de fin de stage laisse le temps de venir à bout de l’écra
     `la fenêtre doit garder une marge confortable (reste ${restant} ms)`);
 });
 
+test('pendant la fenêtre, les bonus ne tombent plus', () => {
+  const bench = sandbox();
+  const box = makePowerUp();
+  bench.powerUps.push(box);
+  bench.beginPowerUpCollection();
+
+  // Même très loin du joueur, un bonus ne doit plus glisser vers le bas : il
+  // attend d'être ramassé. C'est ce qui rendait le ramassage impossible.
+  const y0 = box.y;
+  bench.updatePowerUps(16);
+  assert.ok(box.vy >= 0, `aucune chute résiduelle (vy = ${box.vy.toFixed(1)})`);
+  assert.ok(box.y >= y0 - 1, 'le bonus ne doit pas descendre pendant la fenêtre');
+
+  // Et une fois la fenêtre fermée, la chute normale reprend.
+  bench.completePowerUpCollection();
+  bench.consumePowerUpCollection();
+  const libre = makePowerUp();
+  bench.powerUps.length = 0;
+  bench.powerUps.push(libre);
+  bench.updatePowerUps(16);
+  assert.ok(libre.vy > 0, 'hors fenêtre, un bonus retombe normalement');
+});
+
 test('la transition attend le ramassage puis repart sur son délai normal', () => {
   const game = read('js/game.js');
 
@@ -238,6 +261,13 @@ test('la transition attend le ramassage puis repart sur son délai normal', () =
   const collection = game.indexOf('pendingCollectMs >= 0');
   const transition = game.indexOf('if (pendingTransitionMs >= 0) {');
   assert.ok(collection >= 0 && transition > collection, 'le ramassage doit précéder la transition');
+
+  // Aucune condition d'ÉTAT ne doit pouvoir fermer la fenêtre : un test d'état
+  // qui échoue fermait la fenêtre dès la première frame, ce qui produisait une
+  // transition instantanée. Seuls le champ vide et le temps écoulé décident.
+  assert.doesNotMatch(game, /pendingCollectMs <= 0 \|\| !isPowerUpCollectionActive\(\)/,
+    'la fermeture ne doit pas dépendre d’un état du module');
+  assert.match(game, /const champVide = /, 'la fermeture doit dépendre du champ réel');
 
   // Aucun chemin de sortie ne doit laisser la fenêtre ouverte.
   assert.match(game, /pendingCollectMs = -1;\s*\n\s*resetPowerUpCollection/, 'le retour au menu doit annuler la fenêtre');

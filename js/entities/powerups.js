@@ -248,10 +248,14 @@ function createPowerUp(x, y, forcedType) {
  * ========================================================================== */
 /** État du ramassage : 0 = inactif, 1 = en cours, 2 = terminé (à consommer). */
 let powerUpCollectPhase = 0;
+// Pendant la fenêtre, les bonus ne tombent plus : ils ne peuvent donc pas
+// glisser hors de l'écran pendant que le joueur vient les chercher.
+let powerUpCollectFrozen = false;
 
 /** Ouvre la fenêtre de ramassage. Idempotent : un rappel ne la relance pas. */
 function beginPowerUpCollection() {
   powerUpCollectPhase = 1;
+  powerUpCollectFrozen = true;
   try { JUICE.preset('powerUp', 0.35); } catch (e) { /* retour facultatif */ }
 }
 
@@ -261,6 +265,7 @@ function isPowerUpCollectionActive() { return powerUpCollectPhase === 1; }
 /** Ferme la fenêtre (fin naturelle ou ramassage complet). Idempotent. */
 function completePowerUpCollection() {
   if (powerUpCollectPhase === 1) powerUpCollectPhase = 2;
+  powerUpCollectFrozen = false;
 }
 
 /** À consommer UNE fois par la boucle : vrai si la fenêtre vient de se fermer. */
@@ -271,7 +276,7 @@ function consumePowerUpCollection() {
 }
 
 /** Annule la fenêtre (nouvelle partie, retour au menu). */
-function resetPowerUpCollection() { powerUpCollectPhase = 0; }
+function resetPowerUpCollection() { powerUpCollectPhase = 0; powerUpCollectFrozen = false; }
 
 function updatePowerUps(deltaTime) {
   try {
@@ -327,6 +332,9 @@ function updatePowerUps(deltaTime) {
         const k = Math.pow(collecting ? 0.12 : 0.02, dt);
         p.vx *= k; p.vy *= k;
         if (!collecting) p.vy = Math.max(p.vy, TEMPO.POWERUP_FALL_SPEED * 0.4);
+      } else if (powerUpCollectFrozen) {
+        // Fenêtre de ramassage : le bonus fait du surplace au lieu de tomber.
+        p.vx = 0; p.vy = 0;
       } else {
         p.vx = damp(p.vx, 0, Math.pow(0.05, 4), dt);
         p.vy = damp(p.vy, TEMPO.POWERUP_FALL_SPEED, Math.pow(0.05, 3), dt);
