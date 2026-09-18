@@ -405,6 +405,8 @@ function update(deltaTime) {
         // fin de stage arrivent tous les deux avant la fermeture.
         pendingCollectMs = TEMPO.STAGE_COLLECT_MS;
       }
+      // DIAGNOSTIC TEMPORAIRE (à retirer).
+      if (typeof debugCollectionTick === 'function') debugCollectionTick();
     }
 
     // Minuterie de fin de stage (remplace l'ancien setTimeout)

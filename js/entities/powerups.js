@@ -278,6 +278,19 @@ function consumePowerUpCollection() {
 /** Annule la fenêtre (nouvelle partie, retour au menu). */
 function resetPowerUpCollection() { powerUpCollectPhase = 0; powerUpCollectFrozen = false; }
 
+/** DIAGNOSTIC TEMPORAIRE (à retirer) : état du ramassage, une ligne par frame
+ *  seulement quand quelque chose change, pour voir si les bonus SE DÉPLACENT
+ *  vers le joueur ou restent cloués sur place. */
+function debugCollectionTick() {
+  if (powerUpCollectPhase !== 1 || powerUps.length === 0) return;
+  const p = powerUps[0];
+  const cx = p.x + p.width / 2, cy = p.y + p.height / 2;
+  const d = Math.round(Math.hypot(player.x + player.width / 2 - cx,
+                                 player.y + player.height / 2 - cy));
+  console.log('[ramassage] bonus', p.type, '· distance =', d,
+    'px · vitesse =', Math.round(Math.hypot(p.vx, p.vy)), 'px/s');
+}
+
 function updatePowerUps(deltaTime) {
   try {
     ensurePowerUpBridges();
