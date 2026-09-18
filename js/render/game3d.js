@@ -37,9 +37,13 @@ const GAME3D = (() => {
   const CAM_BACK_RATIO = 0.55;     // recul derrière le vaisseau
   const CAM_LAG = 0.14;            // le cadre RETARDE sur les déplacements
   const CAM_ROLL = 0.10;           // inclinaison du cadre quand on vire
-  const CAM_LOOK_RATIO = 0.42;     // distance du point visé devant le vaisseau
+  const CAM_LOOK_RATIO = 0.60;     // distance du point visé devant le vaisseau
   const CAM_LOOK_Y = 30;           // hauteur du point visé
-  const FOV = 44;
+  // Champ LARGE (mesuré) : à 44° la caméra rapprochée laissait 60 % du bord
+  // gauche hors cadre — une menace pouvait tirer sans être vue. À 60°, le
+  // vaisseau reste bas (72 %) ET le bord redevient visible sur 2/3 de sa
+  // profondeur. La perspective y gagne aussi en intensité.
+  const FOV = 60;
   const HORIZON = 6000;            // distance du plan de fond
 
   // Ciel : l'astre du jeu, posé loin derrière, rafraîchi une frame sur N.

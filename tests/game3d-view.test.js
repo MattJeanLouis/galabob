@@ -219,6 +219,30 @@ test('CADRAGE : le vaisseau est DEVANT, bas dans le cadre, à toute taille', () 
   }
 });
 
+test('CADRAGE : le terrain reste lisible sur les BORDS', () => {
+  const { GAME3D } = charger();
+
+  // Une caméra rapprochée élargit le champ proche : poussée trop loin, elle
+  // sortait 60 % du bord latéral du cadre — une menace pouvait tirer sans être
+  // vue. C'est le contrepoids du réglage « derrière le vaisseau ».
+  for (const [w, h] of [[800, 600], [1200, 900]]) {
+    const visibles = [];
+    for (let i = 0; i <= 8; i++) {
+      const snap = instantane();
+      snap.enemies = [{ x: 0, y: Math.round((i / 8) * (h - 42)), width: 32, height: 32, type: 'normal' }];
+      snap.player = { ...snap.player, x: w / 2 - 20, y: h - 60 };
+      snap.playerBullets = []; snap.enemyBullets = []; snap.powerUps = [];
+      snap.explosions = []; snap.boss = null;
+      const m = GAME3D.frame(snap, w, h).markers.enemies[0];
+      visibles.push(m.x >= 0 && m.x <= w && m.y >= 0 && m.y <= h);
+    }
+    const part = visibles.filter(Boolean).length / visibles.length;
+    assert.ok(part >= 0.6,
+      `le bord latéral doit rester visible sur au moins 60 % de sa profondeur ` +
+      `en ${w}×${h} (mesuré ${Math.round(part * 100)} %)`);
+  }
+});
+
 test('CADRAGE : la profondeur se lit — le lointain est plus haut et plus petit', () => {
   const { GAME3D } = charger();
   const snap = instantane();
