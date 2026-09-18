@@ -996,7 +996,7 @@ function drawMenu() {
   // Rappel des commandes : le raccourci T reste un outil de développement,
   // volontairement absent d'ici.
   const footSize = Math.max(8, 9 * S);
-  UIKIT.label(c, 'ZQSD / FLÈCHES  PILOTER   ·   ESPACE  TIRER   ·   P  PAUSE   ·   ÉCHAP  QUITTER', W - pad, H - 42 * S,
+  UIKIT.label(c, 'ZQSD / FLÈCHES  PILOTER   ·   ESPACE  ACTIVER UN BONUS   ·   C  VUE PERSPECTIVE   ·   P  PAUSE   ·   ÉCHAP  QUITTER', W - pad, H - 42 * S,
     PALETTE.ui.textDim, { size: footSize, tracking: 2.2 * S, align: 'right', alpha: 0.54 });
   UIKIT.label(c, 'M  MODE   ·   V  VAISSEAU   ·   S  PARAMÈTRES', W - pad, H - 26 * S,
     PALETTE.ui.textDim, { size: footSize, tracking: 2.2 * S, align: 'right', alpha: 0.54 });

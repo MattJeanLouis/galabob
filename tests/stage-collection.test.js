@@ -23,7 +23,11 @@ function tempoFromConfig() {
     assert.ok(found, `TEMPO.${name} introuvable dans config.js`);
     return Number(found[1]);
   };
-  return { POWERUP_FALL_SPEED: pick('POWERUP_FALL_SPEED'), STAGE_COLLECT_MS: pick('STAGE_COLLECT_MS') };
+  return {
+    POWERUP_FALL_SPEED: pick('POWERUP_FALL_SPEED'),
+    STAGE_COLLECT_MS: pick('STAGE_COLLECT_MS'),
+    CAPTURE: pick('POWERUP_CAPTURE_MS')
+  };
 }
 
 /**
@@ -59,6 +63,10 @@ function sandbox() {
     lerp: (a, b, t) => a + (b - a) * t, smoothstep: (x) => x * x * (3 - 2 * x),
     score: 0, comboCount: 0, comboTimer: 0,
     playerMagnetRange: () => 120, playerMagnetPull: () => 1400,
+    // Âge du dernier appui sur la barre d'espace : la capture le lit sans le
+    // consommer. On le pilote depuis le test.
+    pressAge: { valeur: null },
+    INPUT: { pressAge() { return this._age == null ? null : this._age; }, _age: null },
     // Décor de stage : sans ces fabriques, initStage s'arrêterait avant d'avoir
     // purgé l'onde — c'est justement ce que le test doit observer.
     createFormation() { enemies.push({ x: 0, y: 0, width: 30, height: 24, hp: 1 }); },
@@ -105,6 +113,8 @@ function sandbox() {
     bombWaves: bindings.bombWaves,
     stageSystem: bindings.stageSystem,
     createPowerUp: (...args) => call('createPowerUp', ...args),
+    /** Simule un appui sur Espace : `age` ms avant maintenant (null = aucun). */
+    press(age) { context.INPUT._age = age; },
     updatePowerUps: (ms) => call('updatePowerUps', ms),
     resetStageBlast: () => call('resetStageBlast'),
     beginPowerUpCollection: () => call('beginPowerUpCollection'),
@@ -265,6 +275,47 @@ test('GARANTIE : à la fermeture, tout bonus en vol est ramassé', () => {
     'aucun bonus ne doit être perdu à la fermeture de la fenêtre');
   assert.equal(bench.consumePowerUpCollection(), true,
     'la fermeture doit être signalée une fois à la boucle');
+});
+
+test('un bonus touché sans appui au bon moment est PERDU', () => {
+  const bench = sandbox();
+  const box = makePowerUp();
+  box.x = bench.player.x; box.y = bench.player.y;      // au contact
+  bench.powerUps.push(box);
+  bench.press(null);                                    // aucun appui
+
+  const fenetre = bench.tempo.CAPTURE;
+  let ecoule = 0;
+  while (bench.powerUps.length && ecoule < fenetre + 200) {
+    bench.updatePowerUps(16);
+    ecoule += 16;
+  }
+  assert.equal(bench.powerUps.length, 0, 'le bonus doit avoir disparu');
+  assert.ok(ecoule >= fenetre,
+    `il doit être perdu APRÈS la fenêtre, pas avant (${ecoule} ms / ${fenetre} ms)`);
+});
+
+test('un bonus touché puis confirmé est activé', () => {
+  const bench = sandbox();
+  const box = makePowerUp();
+  box.x = bench.player.x; box.y = bench.player.y;
+  bench.powerUps.push(box);
+  bench.press(30);                                      // appui frais
+
+  bench.updatePowerUps(16);
+  assert.equal(bench.powerUps.length, 0, 'le bonus doit être encaissé tout de suite');
+});
+
+test('un appui TROP VIEUX ne confirme rien : il faut appuyer au bon moment', () => {
+  const bench = sandbox();
+  const box = makePowerUp();
+  box.x = bench.player.x; box.y = bench.player.y;
+  bench.powerUps.push(box);
+  // La touche est maintenue depuis longtemps : le geste est périmé.
+  bench.press(bench.tempo.CAPTURE * 4);
+
+  bench.updatePowerUps(16);
+  assert.equal(bench.powerUps.length, 1, 'maintenir la touche ne doit pas suffire');
 });
 
 test('la transition attend le ramassage puis repart sur son délai normal', () => {

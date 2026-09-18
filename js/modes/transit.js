@@ -522,7 +522,7 @@ const TRANSIT = (function () {
       { size: cl(W * 0.021, 17, 29), align: 'center', alpha: cl(S.messageT, 0, 1), glowScale: 0.6 });
     if (S.t < 6.5) {
       const a = cl(S.t / 0.5, 0, 1) * cl((6.5 - S.t) / 1.1, 0, 1);
-      NEON.text(c, 'FLÈCHES / ZQSD : DÉPLACEMENT   ·   ESPACE : TIR CONTINU', W / 2, H - 78,
+      NEON.text(c, 'FLÈCHES / ZQSD : DÉPLACEMENT   ·   ESPACE : TIR', W / 2, H - 78,
         'ui', { size: cl(W * 0.0085, 9, 12), align: 'center', alpha: a * 0.76, glowScale: 0.22 });
     }
     if (S.route.warp > 0.12) {

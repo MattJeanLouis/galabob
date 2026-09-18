@@ -662,10 +662,12 @@ function updatePlayerFiring(deltaTime) {
   const held = (typeof INPUT !== 'undefined' && INPUT.shoot) ? INPUT.shoot() : !!keys[' '];
   const buffered = (typeof INPUT !== 'undefined' && INPUT.shootBuffered) ? INPUT.shootBuffered() : false;
   const mode = _playerGameMode();
-  // Le chargeur et la recharge du mode Assaut suffisent à rythmer le canon :
-  // maintenir la touche vide le chargeur puis reprend automatiquement après
-  // la recharge, sans imposer au joueur de marteler Espace.
-  const wants = held || buffered;
+  // AUTO-TIR EN COMBAT. Le canon tire de lui-même : maintenir une touche
+  // n'apporte rien (elle est déjà presque toujours enfoncée) et elle est
+  // désormais RÉSERVÉE à l'activation des bonus. En boutique, au contraire, le
+  // tir reste une décision : c'est lui qui achète.
+  const enCombat = (typeof gameState === 'undefined') || gameState === 'playing';
+  const wants = enCombat ? true : (held || buffered);
 
   // LASER : faisceau CONTINU, aucune cadence. On note juste l'intention de tir ;
   // updatePlayerLaser() fait le reste (montée en puissance, dégâts, son).

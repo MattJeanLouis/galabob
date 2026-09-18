@@ -370,10 +370,44 @@ function updatePowerUps(deltaTime) {
 
       if (p.y > CANVAS_HEIGHT + 40) { powerUps.splice(i, 1); continue; }
 
-      // --- ramassage : AABB pleine taille (collision bénéfique) ------------
-      if (rectIntersect(p, player)) {
-        applyPowerUp(p.type, p.x + p.width / 2, p.y + p.height / 2);
-        powerUps.splice(i, 1);
+      // --- CAPTURE : toucher ne suffit plus, il faut CONFIRMER -------------
+      // Le bonus s'ouvre au contact, puis se referme : appuyer sur la barre
+      // d'espace pendant la fenêtre l'active. Manquée, il est perdu — le raté
+      // doit donc être lisible (anneau qui se referme) et sonore.
+      // FIN DE STAGE : la capture ne s'applique PAS. Les bonus qui arrivent
+      // pendant la fenêtre de ramassage sont encaissés automatiquement — c'est
+      // la garantie acquise (et voulue) : rien ne se perd à la fin d'un stage.
+      if (collecting) {
+        if (rectIntersect(p, player)) {
+          applyPowerUp(p.type, p.x + p.width / 2, p.y + p.height / 2);
+          powerUps.splice(i, 1);
+        }
+        continue;
+      }
+
+      if (p.capture == null && rectIntersect(p, player)) {
+        p.capture = 0;
+        p.vx = 0; p.vy = 0;
+        if (typeof gameEvent === 'function') { try { gameEvent('powerUpOpen', { type: p.type }); } catch (e) { /* audio */ } }
+      }
+      if (p.capture != null) {
+        p.capture += deltaTime;
+        const fenetre = Number(TEMPO.POWERUP_CAPTURE_MS) || 420;
+        const age = (typeof INPUT !== 'undefined' && INPUT.pressAge) ? INPUT.pressAge() : null;
+        const confirme = age != null && age <= fenetre;
+        if (confirme) {
+          applyPowerUp(p.type, p.x + p.width / 2, p.y + p.height / 2);
+          powerUps.splice(i, 1);
+        } else if (p.capture >= fenetre) {
+          // Raté : le bonus est perdu. On le dit clairement — un échec muet
+          // passerait pour un bug.
+          if (typeof createImpactSparks === 'function') {
+            try { createImpactSparks(p.x + p.width / 2, p.y + p.height / 2, 'danger', Math.PI, 8); } catch (e) { /* visuel */ }
+          }
+          if (typeof gameEvent === 'function') { try { gameEvent('powerUpLost', { type: p.type }); } catch (e) { /* audio */ } }
+          powerUps.splice(i, 1);
+        }
+        continue;   // tant que la capture dure, pas d'autre traitement
       }
     }
 
@@ -738,6 +772,22 @@ function drawPowerUps() {
     const col = PALETTE.get(def.color);
     const cx = p.x + p.width / 2;
     const cy = p.y + p.height / 2;
+
+    // ANNEAU DE CAPTURE : il se referme, montrant le temps restant pour
+    // appuyer. Sans ce repère, l'échec passerait pour un bug — le geste doit
+    // être LISIBLE avant d'être exigeant.
+    if (p.capture != null) {
+      const fenetre = Number(TEMPO.POWERUP_CAPTURE_MS) || 420;
+      const reste = Math.max(0, 1 - p.capture / fenetre);
+      const r = 16 + reste * 34;
+      NEON.ring(c, cx, cy, r, 2.2, 'playerCore',
+        { alpha: 0.35 + reste * 0.5, passes: 3, composite: 'lighter' });
+      NEON.ring(c, cx, cy, r * 0.62, 1.4, def.color,
+        { alpha: 0.5 + reste * 0.4, dash: [4, 3], dashOffset: -FRAME.time * 90, passes: 2,
+          composite: 'lighter' });
+      NEON.text(c, 'ESPACE', cx, cy - r - 12, 'playerCore',
+        { size: 12, align: 'center', alpha: 0.5 + reste * 0.5, glowScale: 0.4 });
+    }
     const r = p.width / 2;
     const pulse = 1 + 0.11 * Math.sin(t * 6.4 + (p.phase || 0));
     const alpha = p.magnet ? 1 : 0.94;

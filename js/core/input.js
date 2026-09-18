@@ -90,6 +90,15 @@ const INPUT = {
     this._shootConsumed = true;
   },
 
+  /** Âge du dernier appui sur la touche de tir, en ms (null si aucun).
+   *  Lecture NON destructive : l'auto-tir consomme le buffer pour ses propres
+   *  besoins, mais l'activation d'un bonus doit pouvoir lire LE MÊME geste —
+   *  maintenir la touche ne suffit pas, il faut appuyer au bon moment. */
+  pressAge: function () {
+    if (!this._shootAt) return null;
+    return this.now() - this._shootAt;
+  },
+
   /** Enregistre un front montant de la touche de tir. */
   pressShoot: function () {
     this._shootAt = this.now();

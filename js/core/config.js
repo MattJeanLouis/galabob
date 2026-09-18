@@ -177,6 +177,11 @@ const TEMPO = {
   // cible à aller chercher.
   POWERUP_FALL_SPEED: 95,         // px/s
   POWERUP_DURATION_MS: 9000,
+  // Fenêtre d'ACTIVATION d'un bonus : toucher ne suffit plus, il faut appuyer
+  // sur la barre d'espace au bon moment. Assez large pour que le geste soit
+  // lisible, assez courte pour qu'il se sente. Manquée, le bonus est perdu —
+  // d'où l'anneau qui se referme : il doit se voir AVANT d'être exigeant.
+  POWERUP_CAPTURE_MS: 420,
   POWERUP_DROP_CHANCE: 0.15,      // proba par ennemi tué (13 types : voir powerups.js)
 
   /* ---------- ÉTOILES / PARALLAXE ---------- */

@@ -68,6 +68,7 @@ const GAME3D = (() => {
   let sky = null;
   let skyTexture = null;
   let skyFrame = -999;
+  let skyPainted = 0;      // nombre de fois où une image d'astre a été posée
   let failed = false;
   let failureReason = null;
   let available = false;
@@ -253,6 +254,7 @@ const GAME3D = (() => {
       if (cible && cible.getContext) {
         cible.getContext('2d').drawImage(image, 0, 0, SKY_W, SKY_H);
         skyTexture.needsUpdate = true;
+        skyPainted++;
       }
     } catch (e) { /* le ciel ne doit jamais casser la vue */ }
   }
@@ -542,6 +544,9 @@ const GAME3D = (() => {
     debug: () => (renderer ? { width: renderer.domElement.width, height: renderer.domElement.height } : null),
     /** Raison d'un éventuel repli, pour l'annoncer plutôt que de la subir. */
     failureReason: () => failureReason,
+    /** État du ciel : présent ? combien d'images d'astre reçues ? */
+    skyInfo: () => ({ present: !!sky, textured: !!skyTexture, painted: skyPainted,
+      space3d: (typeof window.SPACE3D !== 'undefined') }),
     reset() { /* rien à réinitialiser : la vue ne possède aucun état de jeu */ }
   };
 })();
