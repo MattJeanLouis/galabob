@@ -202,15 +202,21 @@ test('sans SPACE3D, la vue fonctionne quand même', () => {
   assert.equal(r.markers.enemies.length, 2, 'le reste doit continuer de fonctionner');
 });
 
-test('CADRAGE : le vaisseau est DEVANT, en bas du cadre', () => {
+test('CADRAGE : le vaisseau est DEVANT, bas dans le cadre, à toute taille', () => {
   const { GAME3D } = charger();
   const snap = instantane();
   snap.enemies = [];
-  const r = GAME3D.frame(snap, 800, 600);
 
-  // Être « derrière le vaisseau », c'est le voir bas dans le cadre et de près.
-  assert.ok(r.markers.ship.y > 600 * 0.55,
-    `le vaisseau doit être dans la moitié basse (y = ${Math.round(r.markers.ship.y)})`);
+  // Une bande, pas un point : « derrière le vaisseau » veut dire qu'on le voit
+  // bas et de près, sans qu'il colle au bord ni remonte au centre. La bande doit
+  // tenir à toutes les tailles de fenêtre — c'est ce qu'un plancher de recul
+  // trop haut empêchait (la caméra restait figée à distance constante).
+  for (const [w, h] of [[800, 600], [1200, 900], [1440, 1080]]) {
+    const r = GAME3D.frame({ ...snap }, w, h);
+    const pct = r.markers.ship.y / h * 100;
+    assert.ok(pct >= 68 && pct <= 88,
+      `le vaisseau doit rester bas et lisible en ${w}×${h} (mesuré ${pct.toFixed(0)} %)`);
+  }
 });
 
 test('CADRAGE : la profondeur se lit — le lointain est plus haut et plus petit', () => {

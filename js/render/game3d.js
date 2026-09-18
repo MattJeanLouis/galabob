@@ -34,9 +34,11 @@ const GAME3D = (() => {
   // pas le survoler. Une caméra haute et parfaitement centrée donnait une vue
   // d'observation sans sensation de vitesse.
   const CAM_HEIGHT_RATIO = 0.30;   // altitude = hauteur du canvas × ce ratio
-  const CAM_BACK_RATIO = 0.72;     // recul derrière le vaisseau
+  const CAM_BACK_RATIO = 0.55;     // recul derrière le vaisseau
   const CAM_LAG = 0.14;            // le cadre RETARDE sur les déplacements
   const CAM_ROLL = 0.10;           // inclinaison du cadre quand on vire
+  const CAM_LOOK_RATIO = 0.42;     // distance du point visé devant le vaisseau
+  const CAM_LOOK_Y = 30;           // hauteur du point visé
   const FOV = 44;
   const HORIZON = 6000;            // distance du plan de fond
 
@@ -400,7 +402,7 @@ const GAME3D = (() => {
     // vire : c'est ce décalage qui donne la sensation d'être à bord. Une caméra
     // collée et parfaitement centrée donnait une vue d'observation inerte.
     const camHeight = h * CAM_HEIGHT_RATIO;
-    const camBack = Math.max(520, h * CAM_BACK_RATIO);
+    const camBack = Math.max(240, h * CAM_BACK_RATIO);
     const lagX = px - camX;
     const lagTilt = player.tilt || 0;
     camX += lagX * 0.14;
@@ -411,7 +413,7 @@ const GAME3D = (() => {
     if (sky) sky.position.set(camX, camHeight * 0.5, pz - SKY_DISTANCE);
     refreshSky();
     camera.up.set(Math.sin(camRoll), Math.cos(camRoll), 0);
-    camera.lookAt(lookX, 30, pz - h * 0.26);
+    camera.lookAt(lookX, CAM_LOOK_Y, pz - h * CAM_LOOK_RATIO);
 
     // --- vaisseau : il s'incline, il recule, il pousse ----------------------
     const rendererKey = snapshot.shipRenderer || 'legacy-vector';
