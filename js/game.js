@@ -61,7 +61,7 @@ function updateViewBlend(realDtMs) {
   // Le décor céleste s'atténue progressivement : réglé pour la vue à plat, il
   // devenait un aplat laiteux dès qu'on regardait l'horizon.
   if (typeof BACKDROP !== 'undefined' && BACKDROP && typeof BACKDROP.setViewDim === 'function') {
-    try { BACKDROP.setViewDim(1 - viewBlend * 0.85); } catch (e) { /* décor facultatif */ }
+    try { BACKDROP.setViewDim(1 - viewBlend); } catch (e) { /* décor facultatif */ }
   }
 }
 

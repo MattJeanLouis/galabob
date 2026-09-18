@@ -1933,6 +1933,10 @@ const BACKDROP = (function () {
   /** Couches LOINTAINES : nébuleuse, aurore, brume. À dessiner SOUS les étoiles. */
   function drawDeep(c) {
     if (!c || !ensure()) return;
+    // Vue en perspective : le décor céleste est masqué. Réglé pour la vue à
+    // plat, il devenait — même très atténué — une bande brûlée par le bloom
+    // dès qu'on regardait l'horizon. Le ciel de la vue 3D est son propre fond.
+    if (S.viewDim <= 0.001) return;
     if (S.frameDeep === FRAME.frame) return;
     S.frameDeep = FRAME.frame;
     const t0 = performance.now();
@@ -2059,6 +2063,7 @@ const BACKDROP = (function () {
 
   function drawFront(c) {
     if (!c || !ensure()) return;
+    if (S.viewDim <= 0.001) return;   // cf. drawDeep : décor masqué en perspective.
     if (S.frameFront === FRAME.frame) return;
     S.frameFront = FRAME.frame;
     const t0 = performance.now();
