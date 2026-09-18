@@ -22,16 +22,20 @@ const GAME3D = (() => {
   const SPRITE_PX = 512;
   const MAX_ENEMIES = 48;
   const MAX_SHOTS = 160;
+  const MAX_ENEMY_SHOTS = 96;
 
   // --- placement de la caméra ------------------------------------------------
   // La caméra se place AU-DESSUS de la position du vaisseau dans le plan :
   // elle suit donc la profondeur sans jamais laisser le vaisseau sortir du
   // cadre. C'est ce qui rend les deux vues superposables sans rééquilibrage.
-  // Champ serré : on veut des ennemis qui GROSSISSENT en approchant, pas une
-  // étendue vide. Un FOV large tassait tout le terrain dans un coin.
-  const CAM_HEIGHT_RATIO = 0.52;   // altitude = hauteur du canvas × ce ratio
-  const CAM_BACK_RATIO = 0.62;     // recul derrière le vaisseau
-  const FOV = 38;
+  // Champ serré, caméra BASSE et PROCHE : on veut être derrière le vaisseau,
+  // pas le survoler. Une caméra haute et parfaitement centrée donnait une vue
+  // d'observation sans sensation de vitesse.
+  const CAM_HEIGHT_RATIO = 0.30;   // altitude = hauteur du canvas × ce ratio
+  const CAM_BACK_RATIO = 0.72;     // recul derrière le vaisseau
+  const CAM_LAG = 0.14;            // le cadre RETARDE sur les déplacements
+  const CAM_ROLL = 0.10;           // inclinaison du cadre quand on vire
+  const FOV = 44;
   const HORIZON = 6000;            // distance du plan de fond
 
   // Le sol ne s'étend que sur la zone réellement survolée : un plan plus large
@@ -64,8 +68,12 @@ const GAME3D = (() => {
   let enemySprites = [];
   let enemyTextures = {};
   let shotSprites = [];
+  let enemyShotSprites = [];
   let shotTexture = null;
+  let enemyShotTextures = {};
   const temp = new THREE.Vector3();
+  let camX = 0;        // position lissée du cadre (retard)
+  let camRoll = 0;     // inclinaison lissée
 
   function paletteColor(key, fallback) {
     try {
@@ -125,6 +133,33 @@ const GAME3D = (() => {
     }
   }
 
+  /** Une texture de trait lumineux, colorée par la palette du jeu. */
+  function buildBoltTexture(colorKey) {
+    const canvas = spriteCanvas((context) => {
+      const trip = (() => { try { return PALETTE.get(colorKey); } catch (e) { return null; } })();
+      const core = (trip && trip.core) || '#ffffff';
+      const glow = (trip && trip.glow) || '#ff2b55';
+      const c = SPRITE_PX / 2;
+      const g = context.createRadialGradient(c, c, 0, c, c, SPRITE_PX * 0.5);
+      g.addColorStop(0, core);
+      g.addColorStop(0.22, glow);
+      g.addColorStop(1, 'rgba(0,0,0,0)');
+      context.fillStyle = g;
+      context.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
+    });
+    return textureFrom(canvas);
+  }
+
+  function buildEnemyShotTextures() {
+    enemyShotTextures = {
+      normal: buildBoltTexture('bulletEnemy'),
+      shooter: buildBoltTexture('bulletEnemyShooter'),
+      fast: buildBoltTexture('bulletEnemyFast'),
+      armored: buildBoltTexture('bulletEnemyArmored'),
+      sniper: buildBoltTexture('bulletEnemySniper')
+    };
+  }
+
   function buildShotTexture() {
     const canvas = spriteCanvas((context) => {
       const glow = paletteColor('bulletPlayer', '#7df9ff');
@@ -142,29 +177,22 @@ const GAME3D = (() => {
 
   /** Le sol : une grille discrète qui donne l'échelle et la profondeur. */
   function buildGround() {
-    const grid = new THREE.GridHelper(GROUND_HALF_WIDTH * 2, 52,
-      new THREE.Color(paletteColor('ui', '#3df5ff')),
-      new THREE.Color(paletteColor('enemyShooter', '#2a4a66')));
+    // Grille SOMBRE : ses lignes convergeaient vers l'horizon en s'y
+    // entassant, et le bloom en faisait une nappe cyan qui noyait l'écran.
+    // Elle doit donner l'échelle, pas éclairer.
+    const gris = new THREE.Color('#7f8fa6');
+    const grid = new THREE.GridHelper(GROUND_HALF_WIDTH * 2, 26, gris.clone(), gris.clone());
     grid.material.transparent = true;
-    grid.material.opacity = 0.12;
+    grid.material.opacity = 0.045;
     grid.material.depthWrite = false;
     grid.scale.z = GROUND_DEPTH / (GROUND_HALF_WIDTH * 2);
     grid.position.set(0, -1, -GROUND_DEPTH * 0.5);
     scene.add(grid);
     ground = grid;
 
-    // Un plan très sombre sous la grille : il donne un sol au vaisseau sans
-    // éclaircir l'image. Toute la lumière doit venir des tracés néon.
-    const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(GROUND_HALF_WIDTH * 2, GROUND_DEPTH),
-      new THREE.MeshBasicMaterial({
-        color: new THREE.Color(paletteColor('bg', '#05060f')),
-        transparent: true, opacity: 0.9, depthWrite: false
-      })
-    );
-    plane.rotation.x = -Math.PI / 2;
-    plane.position.set(0, -1.5, -GROUND_DEPTH * 0.5);
-    scene.add(plane);
+    // PAS de plan de sol : un aplat, même sombre, se lisait comme un dôme gris
+    // en travers de l'écran et noyait le néon. L'espace vide fait mieux
+    // ressortir les vaisseaux — et c'est l'ambiance du mode 2D.
   }
 
   /** PAS de ciel synthétique ici. Un plan de lueur, même discret, devenait
@@ -191,11 +219,15 @@ const GAME3D = (() => {
       buildShipTextures();
       buildEnemyTextures();
       buildShotTexture();
+      buildEnemyShotTextures();
 
       // -- vaisseau ----------------------------------------------------------
+      // Les sprites sont ADDITIFS : c'est ce qui les fait briller comme les
+      // tracés néon du mode 2D au lieu de rester des images plates et sombres.
       shipSprite = new THREE.Sprite(new THREE.SpriteMaterial({
         map: shipTextures['legacy-vector'] ? shipTextures['legacy-vector'][0] : null,
-        transparent: true, depthTest: false, depthWrite: false, toneMapped: false
+        transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+        blending: THREE.AdditiveBlending
       }));
       shipSprite.scale.set(64, 38, 1);
       shipSprite.renderOrder = 30;
@@ -204,12 +236,25 @@ const GAME3D = (() => {
       // -- ennemis -----------------------------------------------------------
       for (let i = 0; i < MAX_ENEMIES; i++) {
         const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-          transparent: true, depthTest: false, depthWrite: false, toneMapped: false
+          transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
+          blending: THREE.AdditiveBlending
         }));
         sprite.visible = false;
         sprite.renderOrder = 20;
         scene.add(sprite);
         enemySprites.push(sprite);
+      }
+
+      // -- projectiles ennemis : gros et colorés, ils doivent SE VOIR --------
+      for (let i = 0; i < MAX_ENEMY_SHOTS; i++) {
+        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+          map: enemyShotTextures.normal, transparent: true, depthTest: false,
+          depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false
+        }));
+        sprite.visible = false;
+        sprite.renderOrder = 26;
+        scene.add(sprite);
+        enemyShotSprites.push(sprite);
       }
 
       // -- projectiles du joueur --------------------------------------------
@@ -276,22 +321,36 @@ const GAME3D = (() => {
     const px = planeX(player.x + (player.width || 40) / 2);
     const pz = planeZ(player.y + (player.height || 22) / 2);
 
-    // --- caméra : au-dessus du vaisseau, qui regarde vers l'horizon --------
+    // --- caméra : DERRIÈRE le vaisseau, et elle RETARDE ---------------------
+    // Le cadre suit la position du vaisseau avec du mou et s'incline quand on
+    // vire : c'est ce décalage qui donne la sensation d'être à bord. Une caméra
+    // collée et parfaitement centrée donnait une vue d'observation inerte.
     const camHeight = h * CAM_HEIGHT_RATIO;
-    // On recule d'une distance FIXE, indépendante de la taille du canvas : la
-    // profondeur perçue ne doit pas changer avec la fenêtre.
     const camBack = Math.max(520, h * CAM_BACK_RATIO);
-    camera.position.set(px, camHeight, pz + camBack);
-    camera.lookAt(px, 0, pz - h * 0.22);
+    const lagX = px - camX;
+    const lagTilt = player.tilt || 0;
+    camX += lagX * 0.14;
+    camRoll += ((lagX / Math.max(200, w * 0.35)) * CAM_ROLL - camRoll) * 0.12;
+    camera.position.set(camX, camHeight, pz + camBack);
+    const lookX = camX + lagX * 0.35;
+    camera.up.set(Math.sin(camRoll), Math.cos(camRoll), 0);
+    camera.lookAt(lookX, 30, pz - h * 0.26);
 
-    // --- vaisseau ---------------------------------------------------------
+    // --- vaisseau : il s'incline, il recule, il pousse ----------------------
     const rendererKey = snapshot.shipRenderer || 'legacy-vector';
     const hullTextures = shipTextures[rendererKey] || shipTextures['legacy-vector'];
     if (shipSprite) {
       shipSprite.visible = true;
-      shipSprite.position.set(px, 0, pz);
+      const kick = player.kick || 0;
+      const thrust = player.thrust == null ? 0.4 : player.thrust;
+      shipSprite.position.set(px, 6 + kick * 1.6, pz + kick * 2.2);
+      // Le roulis du vaisseau vient de SON inclinaison, pas de celle du cadre :
+      // le sol reste stable, le vaisseau vit.
+      shipSprite.material.rotation = -(player.tilt || 0) * 0.42;
+      const s = 1 + thrust * 0.10;
+      shipSprite.scale.set(70 * s, 42 * s, 1);
       setSpriteFrame(shipSprite, hullTextures, animFrame(6));
-      const blink = (player.invulnerable && player.blink) ? 0.35 : 1;
+      const blink = (player.invulnerable && player.blink) ? 0.30 : 1;
       shipSprite.material.opacity = blink;
     }
 
@@ -309,7 +368,7 @@ const GAME3D = (() => {
       sprite.position.set(planeX(e.x + (e.width || 0) / 2), 0, planeZ(e.y + (e.height || 0) / 2));
       sprite.scale.set(size, size, 1);
       setSpriteFrame(sprite, enemyTextures[e.type] || enemyTextures.normal, animFrame(8));
-      sprite.material.opacity = e.hitFlash > 0 ? 1 : 0.96;
+      sprite.material.opacity = 1;
     }
     for (let i = used; i < enemySprites.length; i++) enemySprites[i].visible = false;
 
@@ -326,6 +385,25 @@ const GAME3D = (() => {
       sprite.scale.set(s, s * 2.6, 1);
     }
     for (let i = shot; i < shotSprites.length; i++) shotSprites[i].visible = false;
+
+    // --- projectiles ENNEMIS -------------------------------------------------
+    // Ils manquaient purement et simplement : en perspective on ne voyait pas
+    // ce qui arrivait. Gros, colorés par type, et additifs pour percer le fond.
+    const enemyBullets = snapshot.enemyBullets || [];
+    let incoming = 0;
+    for (let i = 0; i < enemyBullets.length && incoming < enemyShotSprites.length; i++) {
+      const b = enemyBullets[i];
+      if (!b) continue;
+      const sprite = enemyShotSprites[incoming++];
+      const kind = b.kind || 'normal';
+      sprite.visible = true;
+      sprite.position.set(planeX(b.x + (b.width || 0) / 2), 3, planeZ(b.y + (b.height || 0) / 2));
+      const size = Math.max(26, (b.width || 5) * 7);
+      sprite.scale.set(size, size * 1.5, 1);
+      const tex = enemyShotTextures[kind] || enemyShotTextures.normal;
+      if (sprite.material.map !== tex) { sprite.material.map = tex; sprite.material.needsUpdate = true; }
+    }
+    for (let i = incoming; i < enemyShotSprites.length; i++) enemyShotSprites[i].visible = false;
 
     renderer.render(scene, camera);
 

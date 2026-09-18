@@ -1262,6 +1262,9 @@ function stageSnapshot() {
     player: player,
     enemies: enemies,
     playerBullets: playerBullets,
+    // Les projectiles ennemis font partie de la lisibilité : en perspective on
+    // ne voyait pas ce qui arrivait, faute de les projeter.
+    enemyBullets: (typeof enemyBullets !== 'undefined') ? enemyBullets : [],
     shipRenderer: (typeof player !== 'undefined' && player && player.shipRenderer)
       ? player.shipRenderer : 'legacy-vector'
   };
@@ -1299,6 +1302,31 @@ function drawStagePerspective() {
 
 /** Tout le contenu de la scène. `ctx` pointe ici sur le buffer émissif. */
 function drawScene() {
+  // --- VUE EN PERSPECTIVE ---------------------------------------------------
+  // Placée AVANT le décor et les étoiles : c'est l'erreur qui donnait un fond
+  // bleu. `drawStars()` peint le ciel 2D ; en perspective il ne doit pas être
+  // peint du tout, sinon il recouvre la vue 3D (qui a son propre fond).
+  if (viewBlend > 0.001 && gameState === 'playing') {
+    const troisDPrete = typeof GAME3D !== 'undefined' &&
+      typeof GAME3D.isAvailable === 'function' && GAME3D.isAvailable();
+    if (troisDPrete && drawStagePerspective()) return;
+    if (!troisDPrete) {
+      // Rendu indisponible : on repasse à la vue à plat plutôt que de laisser
+      // un écran vide, et on annonce pourquoi.
+      viewMode = 'flat';
+      viewBlend = 0;
+      if (typeof BACKDROP !== 'undefined' && BACKDROP && typeof BACKDROP.setViewDim === 'function') {
+        try { BACKDROP.setViewDim(1); } catch (e) { /* ignoré */ }
+      }
+      try {
+        const why = GAME3D.failureReason ? GAME3D.failureReason() : null;
+        if (typeof hudAlert === 'function') {
+          hudAlert('VUE EN PERSPECTIVE INDISPONIBLE', why ? String(why).slice(0, 60) : 'WEBGL REQUIS', '#ff2b55', 2200);
+        }
+      } catch (e) { /* l'annonce ne doit jamais bloquer le rendu */ }
+    }
+  }
+
   // --- transition de stage -------------------------------------------------
   if (stageSystem.transitionActive) {
     try {
@@ -1360,25 +1388,6 @@ function drawScene() {
   }
 
   // --- jeu -----------------------------------------------------------------
-  // VUE EN PERSPECTIVE : le même stage, la même simulation, une autre caméra.
-  // Seul le rendu change — hitboxes, dégâts et progression restent ceux du jeu.
-  if (viewBlend > 0.001) {
-    if (drawStagePerspective()) return;
-    // Rendu 3D indisponible : on repasse proprement à la vue à plat plutôt que
-    // de laisser un écran vide. La raison est annoncée au joueur.
-    viewMode = 'flat';
-    viewBlend = 0;
-    if (typeof BACKDROP !== 'undefined' && BACKDROP && typeof BACKDROP.setViewDim === 'function') {
-      try { BACKDROP.setViewDim(1); } catch (e) { /* ignoré */ }
-    }
-    try {
-      const why = (typeof GAME3D !== 'undefined' && GAME3D.failureReason) ? GAME3D.failureReason() : null;
-      if (typeof hudAlert === 'function') {
-        hudAlert('VUE EN PERSPECTIVE INDISPONIBLE', why ? String(why).slice(0, 60) : 'WEBGL REQUIS', '#ff2b55', 2200);
-      }
-    } catch (e) { /* l'annonce ne doit jamais bloquer le rendu */ }
-  }
-
   // Le clignotement d'invulnérabilité est appliqué ici, sauf si le module
   // joueur déclare le gérer lui-même (player.handlesOwnBlink = true).
   const hidePlayer = player.blink && !player.handlesOwnBlink;
