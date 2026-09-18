@@ -248,24 +248,29 @@ function createPowerUp(x, y, forcedType) {
  * ========================================================================== */
 /** État du ramassage : 0 = inactif, 1 = en cours, 2 = terminé (à consommer). */
 let powerUpCollectPhase = 0;
-// Pendant la fenêtre, les bonus ne tombent plus : ils ne peuvent donc pas
-// glisser hors de l'écran pendant que le joueur vient les chercher.
-let powerUpCollectFrozen = false;
 
 /** Ouvre la fenêtre de ramassage. Idempotent : un rappel ne la relance pas. */
 function beginPowerUpCollection() {
   powerUpCollectPhase = 1;
-  powerUpCollectFrozen = true;
   try { JUICE.preset('powerUp', 0.35); } catch (e) { /* retour facultatif */ }
 }
 
 /** Le ramassage est-il encore en cours ? (lu par la boucle de jeu) */
 function isPowerUpCollectionActive() { return powerUpCollectPhase === 1; }
 
-/** Ferme la fenêtre (fin naturelle ou ramassage complet). Idempotent. */
+/** Ferme la fenêtre (fin naturelle ou ramassage complet). Idempotent.
+ *  GARANTIE : tout bonus encore en vol est ramassé MAINTENANT. C'est le point
+ *  qui rend la promesse tenable — sans lui, un bonus trop loin était perdu à
+ *  la fermeture, quelle que soit la durée de la fenêtre. */
 function completePowerUpCollection() {
   if (powerUpCollectPhase === 1) powerUpCollectPhase = 2;
-  powerUpCollectFrozen = false;
+  for (let i = powerUps.length - 1; i >= 0; i--) {
+    const p = powerUps[i];
+    if (!p) { powerUps.splice(i, 1); continue; }
+    // On applique au bonus SA position : l'effet part de là où il se trouvait.
+    applyPowerUp(p.type, p.x + p.width / 2, p.y + p.height / 2);
+    powerUps.splice(i, 1);
+  }
 }
 
 /** À consommer UNE fois par la boucle : vrai si la fenêtre vient de se fermer. */
@@ -276,20 +281,7 @@ function consumePowerUpCollection() {
 }
 
 /** Annule la fenêtre (nouvelle partie, retour au menu). */
-function resetPowerUpCollection() { powerUpCollectPhase = 0; powerUpCollectFrozen = false; }
-
-/** DIAGNOSTIC TEMPORAIRE (à retirer) : état du ramassage, une ligne par frame
- *  seulement quand quelque chose change, pour voir si les bonus SE DÉPLACENT
- *  vers le joueur ou restent cloués sur place. */
-function debugCollectionTick() {
-  if (powerUpCollectPhase !== 1 || powerUps.length === 0) return;
-  const p = powerUps[0];
-  const cx = p.x + p.width / 2, cy = p.y + p.height / 2;
-  const d = Math.round(Math.hypot(player.x + player.width / 2 - cx,
-                                 player.y + player.height / 2 - cy));
-  console.log('[ramassage] bonus', p.type, '· distance =', d,
-    'px · vitesse =', Math.round(Math.hypot(p.vx, p.vy)), 'px/s');
-}
+function resetPowerUpCollection() { powerUpCollectPhase = 0; }
 
 function updatePowerUps(deltaTime) {
   try {
@@ -305,11 +297,9 @@ function updatePowerUps(deltaTime) {
     // Portée et force d'attraction : l'AIMANT les fait exploser (player.js).
     const range = (typeof playerMagnetRange === 'function') ? playerMagnetRange() : 120;
     const pull = (typeof playerMagnetPull === 'function') ? playerMagnetPull() : 1400;
-    // Ramassage de fin de stage : attraction totale, depuis n'importe où, et
-    // sans le plancher de chute qui empêchait de remonter un bonus.
+    const range2 = range * range;
+    // Ramassage de fin de stage : il a sa propre règle de convergence, plus bas.
     const collecting = powerUpCollectPhase === 1;
-    const range2 = collecting ? Infinity : range * range;
-    const pullForce = collecting ? Math.max(pull, 9000) : pull;
 
     for (let i = powerUps.length - 1; i >= 0; i--) {
       const p = powerUps[i];
@@ -337,17 +327,36 @@ function updatePowerUps(deltaTime) {
       const d2 = dx * dx + dy * dy;
       p.magnet = d2 < range2;
 
+      if (collecting) {
+        // RAMASSAGE DE FIN DE STAGE : convergence garantie, pas une simple
+        // attraction. Mesuré en jeu : la force d'attraction ne fermait la
+        // distance que de ~48 px en 9 frames, l'effet visqueux annulant
+        // l'accélération — un bonus à 200 px n'arrivait jamais à temps.
+        // On rapproche donc le bonus d'une fraction FIXE de la distance
+        // restante par frame (indépendante du framerate), et on le ramasse
+        // dès qu'il est à portée. Le mouvement reste visible : c'est la
+        // trajectoire, simplement elle aboutit toujours.
+        const d = Math.sqrt(d2);
+        if (d < 34) {
+          applyPowerUp(p.type, cx, cy);
+          powerUps.splice(i, 1);
+          continue;
+        }
+        const rate = Math.pow(0.0009, dt);       // ~0,3 s pour venir de tout l'écran
+        p.x = pcx - dx * rate - p.width / 2;
+        p.y = pcy - dy * rate - p.height / 2;
+        p.vx = 0; p.vy = 0;
+        continue;                                 // aucune autre intégration
+      }
+
       if (p.magnet) {
         const d = Math.sqrt(d2) || 1;
-        p.vx += (dx / d) * pullForce * dt;
-        p.vy += (dy / d) * pullForce * dt;
+        p.vx += (dx / d) * pull * dt;
+        p.vy += (dy / d) * pull * dt;
         // frein visqueux : la course reste lisible au lieu d'osciller
-        const k = Math.pow(collecting ? 0.12 : 0.02, dt);
+        const k = Math.pow(0.02, dt);
         p.vx *= k; p.vy *= k;
-        if (!collecting) p.vy = Math.max(p.vy, TEMPO.POWERUP_FALL_SPEED * 0.4);
-      } else if (powerUpCollectFrozen) {
-        // Fenêtre de ramassage : le bonus fait du surplace au lieu de tomber.
-        p.vx = 0; p.vy = 0;
+        p.vy = Math.max(p.vy, TEMPO.POWERUP_FALL_SPEED * 0.4);
       } else {
         p.vx = damp(p.vx, 0, Math.pow(0.05, 4), dt);
         p.vy = damp(p.vy, TEMPO.POWERUP_FALL_SPEED, Math.pow(0.05, 3), dt);

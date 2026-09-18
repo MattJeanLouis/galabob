@@ -227,20 +227,21 @@ test('le ramassage de fin de stage laisse le temps de venir à bout de l’écra
     `la fenêtre doit garder une marge confortable (reste ${restant} ms)`);
 });
 
-test('pendant la fenêtre, les bonus ne tombent plus', () => {
+test('pendant la fenêtre, un bonus fonce vers le joueur au lieu de tomber', () => {
   const bench = sandbox();
-  const box = makePowerUp();
+  const box = makePowerUp();                 // coin haut droit, joueur en bas à gauche
   bench.powerUps.push(box);
+  const depart = Math.hypot(box.x - bench.player.x, box.y - bench.player.y);
+
   bench.beginPowerUpCollection();
-
-  // Même très loin du joueur, un bonus ne doit plus glisser vers le bas : il
-  // attend d'être ramassé. C'est ce qui rendait le ramassage impossible.
-  const y0 = box.y;
   bench.updatePowerUps(16);
-  assert.ok(box.vy >= 0, `aucune chute résiduelle (vy = ${box.vy.toFixed(1)})`);
-  assert.ok(box.y >= y0 - 1, 'le bonus ne doit pas descendre pendant la fenêtre');
 
-  // Et une fois la fenêtre fermée, la chute normale reprend.
+  const arrivee = Math.hypot(box.x - bench.player.x, box.y - bench.player.y);
+  assert.ok(arrivee < depart,
+    `le bonus doit se rapprocher (${Math.round(depart)} -> ${Math.round(arrivee)} px)`);
+  assert.ok(box.vy <= 0, `il ne doit plus tomber (vy = ${box.vy.toFixed(1)})`);
+
+  // Hors fenêtre, la chute normale reprend exactement comme avant.
   bench.completePowerUpCollection();
   bench.consumePowerUpCollection();
   const libre = makePowerUp();
@@ -248,6 +249,22 @@ test('pendant la fenêtre, les bonus ne tombent plus', () => {
   bench.powerUps.push(libre);
   bench.updatePowerUps(16);
   assert.ok(libre.vy > 0, 'hors fenêtre, un bonus retombe normalement');
+});
+
+test('GARANTIE : à la fermeture, tout bonus en vol est ramassé', () => {
+  const bench = sandbox();
+  // Deux bonus aux deux coins opposés, très loin du joueur.
+  bench.powerUps.push(bench.createPowerUp(1150, 20, 'spread'));
+  bench.powerUps.push(bench.createPowerUp(20, 400, 'double'));
+  bench.beginPowerUpCollection();
+
+  // La fenêtre se ferme AVANT que quoi que ce soit ait pu arriver.
+  bench.completePowerUpCollection();
+
+  assert.equal(bench.powerUps.length, 0,
+    'aucun bonus ne doit être perdu à la fermeture de la fenêtre');
+  assert.equal(bench.consumePowerUpCollection(), true,
+    'la fermeture doit être signalée une fois à la boucle');
 });
 
 test('la transition attend le ramassage puis repart sur son délai normal', () => {

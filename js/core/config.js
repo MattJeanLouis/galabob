@@ -143,12 +143,12 @@ const TEMPO = {
   STAGE_COMPLETE_DELAY_MS: 120,   // avant : 300 ms
   // Fenêtre de ramassage de fin de stage : les bonus encore en l'air sont
   // aimantés vers le joueur avant l'écran de transition. Le stage suivant
-  // n'est lancé qu'après, et rien n'est perdu. Elle est PROLONGÉE tant qu'un
-  // bonus est en vol — ce délai est le temps laissé au champ pour se vider.
-  STAGE_COLLECT_MS: 1500,
+  // n'est lancé qu'après, et rien n'est perdu : la convergence est garantie en
+  // ~0,3 s, et tout bonus encore en vol est ramassé à la fermeture.
+  STAGE_COLLECT_MS: 1200,
   // Garde-fou : au-delà, la partie repart même s'il reste un bonus en vol.
   // Sans ce plafond, un bonus inatteignable relancerait la fenêtre sans fin.
-  STAGE_COLLECT_MAX_MS: 5000,
+  STAGE_COLLECT_MAX_MS: 3500,
   WAVE_SPAWN_DELAY_MS: 220,
   BOOT_DELAY_MS: 0,               // démarrage INSTANTANÉ — ne jamais remonter
 
