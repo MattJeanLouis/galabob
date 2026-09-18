@@ -243,6 +243,8 @@ let powerUpCollectPhase = 0;
 /** Ouvre la fenêtre de ramassage. Idempotent : un rappel ne la relance pas. */
 function beginPowerUpCollection() {
   powerUpCollectPhase = 1;
+  // DIAGNOSTIC TEMPORAIRE (à retirer) : trace la fenêtre de fin de stage.
+  console.log('[ramassage] OUVERTURE · bonus en l’air =', powerUps.length);
   try { JUICE.preset('powerUp', 0.35); } catch (e) { /* retour facultatif */ }
 }
 
@@ -333,6 +335,8 @@ function updatePowerUps(deltaTime) {
 
       // --- ramassage : AABB pleine taille (collision bénéfique) ------------
       if (rectIntersect(p, player)) {
+        // DIAGNOSTIC TEMPORAIRE (à retirer).
+        if (collecting) console.log('[ramassage] RAMASSÉ', p.type);
         applyPowerUp(p.type, p.x + p.width / 2, p.y + p.height / 2);
         powerUps.splice(i, 1);
       }

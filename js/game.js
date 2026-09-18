@@ -389,6 +389,9 @@ function update(deltaTime) {
       if (pendingCollectMs <= 0 || !isPowerUpCollectionActive()) {
         pendingCollectMs = -1;
         completePowerUpCollection();
+        // DIAGNOSTIC TEMPORAIRE (à retirer).
+        console.log('[ramassage] FERMETURE · reste', powerUps.length, 'bonus · transition dans',
+          TEMPO.STAGE_COMPLETE_DELAY_MS, 'ms');
       }
     }
 
@@ -861,58 +864,74 @@ function processEnemyBulletCollisions() {
  * -------------------------------------------------------------------------- */
 
 function handleStageCompletion() {
+  let modeResult = null;
   try {
     stageSystem.stageCompleted = true;
+
+    // DIAGNOSTIC TEMPORAIRE (à retirer) : ce que voit la fin de stage.
+    console.log('[ramassage] FIN DE STAGE', stageSystem.currentStage,
+      '· bonus en l’air =', (typeof powerUps !== 'undefined' && powerUps) ? powerUps.length : 'indisponible');
 
     for (let i = enemies.length - 1; i >= 0; i--) {
       if (enemies[i]) enemies[i].isDeleted = true;
     }
 
-    // L'onde de choc d'une bombe ne franchit JAMAIS un stage : sa durée de vie
-    // (720 ms) dépasse le délai de fin de stage, et elle soldait sinon le stage
-    // suivant en effaçant ses ennemis dès leur apparition.
-    resetStageBlast();
-
-    JUICE.preset('stageClear');
-    gameEvent('stageClear', { stage: stageSystem.currentStage });
-    const modeResult = _modeCall('completeStage', {
-      stage: stageSystem.currentStage,
-      loop: stageSystem.loopCount,
-      score: score
-    });
-    const runtime = _runtime();
-    const mode = runtime && runtime.modes ? runtime.modes.current() : null;
-    sectorTransitPending = (stageSystem.currentStage % 5) === 0;
-    if (runtime && runtime.profile && mode) {
-      const saved = runtime.profile.mode(mode.id) || {};
-      runtime.profile.updateMode(mode.id, {
-        ...saved,
-        highestStage: Math.max(Number(saved.highestStage) || 1, stageSystem.currentStage)
-      });
-    }
-
-    if (modeResult && modeResult.openShop) {
-      playerBullets.length = 0;
-      if (typeof playerSpecialShots !== 'undefined' && playerSpecialShots) playerSpecialShots.length = 0;
-      gameState = 'shop';
-      assaultShopFireArmed = false;
-      // La salle d'arsenal est un niveau jouable : le temps, le pilotage et les
-      // projectiles continuent. Seule la menace de combat est absente.
-      isPaused = false;
-      pendingTransitionMs = -1;
-      pendingCollectMs = -1;
-      return;
-    }
-
-    // Minuterie en temps de JEU, pas un setTimeout : plus de dérive au retour d'onglet.
+    // Le RAMASSAGE est ouvert AVANT toute étape susceptible d'échouer : une
+    // erreur dans le reste de la clôture ne doit jamais le sauter (le `catch`
+    // ci-dessous passe directement au stage suivant — ce serait une transition
+    // instantanée, précisément le symptôme qu'on corrige).
     pendingTransitionMs = TEMPO.STAGE_COMPLETE_DELAY_MS;
-    // Avant de passer au stage suivant, on laisse le joueur ramasser ce qui
-    // traînait : les bonus sont aimantés vers lui, puis la transition démarre.
     pendingCollectMs = TEMPO.STAGE_COLLECT_MS;
     beginPowerUpCollection();
+    // DIAGNOSTIC TEMPORAIRE (à retirer).
+    console.log('[ramassage] fenêtre ouverte pour', pendingCollectMs,
+      'ms · bonus en l’air =', powerUps.length);
+
+    // --- étapes non critiques : une erreur ici ne doit rien interrompre ------
+    try {
+      resetStageBlast();
+      JUICE.preset('stageClear');
+      gameEvent('stageClear', { stage: stageSystem.currentStage });
+      modeResult = _modeCall('completeStage', {
+        stage: stageSystem.currentStage,
+        loop: stageSystem.loopCount,
+        score: score
+      });
+      // Le record par mode ne doit jamais pouvoir bloquer une fin de stage.
+      const runtime = _runtime();
+      const mode = runtime && runtime.modes ? runtime.modes.current() : null;
+      if (runtime && runtime.profile && mode) {
+        const saved = runtime.profile.mode(mode.id) || {};
+        runtime.profile.updateMode(mode.id, {
+          ...saved,
+          highestStage: Math.max(Number(saved.highestStage) || 1, stageSystem.currentStage)
+        });
+      }
+    } catch (sideEffectError) {
+      console.error('Fin de stage : étape non critique ignorée —', sideEffectError);
+    }
+
+    sectorTransitPending = (stageSystem.currentStage % 5) === 0;
   } catch (e) {
     console.error("Erreur dans handleStageCompletion :", e);
+    // DIAGNOSTIC TEMPORAIRE (à retirer).
+    console.log('[ramassage] ÉCHEC de la fin de stage :', e && e.message);
     softResetStage();
+    return;
+  }
+
+  // La boutique d'Assaut remplace le flux normal ; elle se décide après coup,
+  // une fois la fenêtre de ramassage posée.
+  if (modeResult && modeResult.openShop) {
+    playerBullets.length = 0;
+    if (typeof playerSpecialShots !== 'undefined' && playerSpecialShots) playerSpecialShots.length = 0;
+    gameState = 'shop';
+    assaultShopFireArmed = false;
+    // La salle d'arsenal est un niveau jouable : le temps, le pilotage et les
+    // projectiles continuent. Seule la menace de combat est absente.
+    isPaused = false;
+    pendingTransitionMs = -1;
+    pendingCollectMs = -1;
   }
 }
 

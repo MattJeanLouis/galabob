@@ -190,6 +190,12 @@ test('la transition attend le ramassage puis repart sur son délai normal', () =
   assert.ok(collection >= 0 && transition > collection, 'le ramassage doit précéder la transition');
 
   // Aucun chemin de sortie ne doit laisser la fenêtre ouverte.
-  assert.match(game, /pendingCollectMs = -1;\n  resetPowerUpCollection/, 'le retour au menu doit annuler la fenêtre');
-  assert.match(game, /pendingTransitionMs = -1;\n      pendingCollectMs = -1;/, 'la boutique d’Assaut doit l’annuler aussi');
+  assert.match(game, /pendingCollectMs = -1;\s*\n\s*resetPowerUpCollection/, 'le retour au menu doit annuler la fenêtre');
+  assert.match(game, /pendingTransitionMs = -1;\s*\n\s*pendingCollectMs = -1;/, 'la boutique d’Assaut doit l’annuler aussi');
+
+  // La fenêtre est ouverte AVANT les étapes susceptibles d'échouer : sans cela,
+  // une erreur dans la clôture du stage la saute et la transition part aussitôt.
+  const opened = game.indexOf('beginPowerUpCollection();');
+  const risky = game.indexOf("JUICE.preset('stageClear')");
+  assert.ok(opened > 0 && risky > opened, 'la fenêtre doit être ouverte avant les effets de fin de stage');
 });
