@@ -41,6 +41,13 @@ function toggleViewMode() {
     return false;
   }
   viewMode = wantsPerspective ? 'perspective' : 'flat';
+  // Le choix est MÉMORISÉ : le joueur retrouve sa caméra d'une partie à l'autre.
+  try {
+    const runtime = _runtime();
+    if (runtime && runtime.profile && typeof runtime.profile.setViewMode === 'function') {
+      runtime.profile.setViewMode(viewMode);
+    }
+  } catch (e) { /* le profil ne doit jamais bloquer une bascule */ }
   try { gameEvent('uiSelect', { id: 'view' }); } catch (e) { /* audio facultatif */ }
   try { JUICE.punch(0.012); JUICE.flash(PALETTE.get('player').glow, 160, 0.18); }
   catch (e) { /* retour sensoriel facultatif */ }
@@ -77,6 +84,9 @@ window.GALABOB_VIEW = {
   },
   flat: () => { viewMode = 'flat'; viewBlend = 0; updateViewBlend(0); },
   state: () => ({ mode: viewMode, blend: viewBlend }),
+  /** Positionne le fondu de bascule (0 = à plat, 1 = perspective). Sert à
+   *  capturer un instant précis de l'animation — mise au point et vignettes. */
+  blend: (v) => { viewBlend = Math.max(0, Math.min(1, Number(v) || 0)); updateViewBlend(0); return viewBlend; },
   snapshot: () => stageSnapshot()
 };
 let sectorTransitPending = false;
@@ -303,6 +313,19 @@ function initGame() {
     : null;
 
   score = 0;
+
+  // Point de vue mémorisé : on le restaure sans animation (le joueur n'a pas
+  // demandé de bascule), et seulement si le rendu est disponible.
+  try {
+    const runtime = _runtime();
+    const pref = runtime && runtime.profile ? runtime.profile.data.viewMode : null;
+    const dispo = typeof GAME3D !== 'undefined' && typeof GAME3D.isAvailable === 'function'
+      ? GAME3D.isAvailable() : false;
+    viewMode = (pref === 'perspective' && dispo) ? 'perspective' : 'flat';
+    viewBlend = viewMode === 'perspective' ? 1 : 0;
+    updateViewBlend(0);
+  } catch (e) { viewMode = 'flat'; viewBlend = 0; }
+
   const combo = _combo();
   if (combo) {
     combo.reset();
@@ -1281,21 +1304,39 @@ function drawStagePerspective() {
 
   // Le canvas 3D entre dans la MÊME scène émissive que la vue à plat : c'est ce
   // qui lui donne le bloom, l'aberration et la vignette du mode classique.
-  // `viewBlend` sert de fondu enchaîné pendant la bascule.
+  //
+  // BASCULE = PLAN DE CAMÉRA, pas un simple fondu. Pendant l'animation, l'image
+  // arrive de plus haut et légèrement plus large, puis se pose : on lit un
+  // mouvement de caméra qui se place derrière le vaisseau, pas une dissolution.
+  const t = Math.max(0, Math.min(1, viewBlend));
+  const chute = (1 - t) * 90;                 // px : la caméra descend se poser
+  const zoom = 1 + (1 - t) * 0.10;            // elle arrive d'un peu plus loin
+  const cx = CANVAS_WIDTH / 2, cy = CANVAS_HEIGHT / 2;
+  const place = (c) => {
+    c.translate(cx, cy + chute);
+    c.scale(zoom, zoom);
+    c.translate(-cx, -cy);
+  };
+
   ctx.save();
   ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = Math.max(0, Math.min(1, viewBlend));
+  ctx.globalAlpha = t;
+  place(ctx);
   ctx.drawImage(result.canvas, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
   ctx.restore();
 
   // Le vaisseau est marqué d'un noyau blanc : sa VRAIE hitbox, identique à
   // celle de la vue à plat. Le joueur doit pouvoir lire son esquive partout.
+  // Le repère subit la MÊME transformation que l'image, sinon il se détache.
   const marker = result.markers && result.markers.ship;
   if (marker && marker.visible && typeof NEON !== 'undefined') {
+    ctx.save();
+    place(ctx);
     NEON.dot(ctx, marker.x, marker.y, 2.4, 'playerCore',
-      { alpha: 0.85 * viewBlend, glowScale: 0.35, passes: 2 });
+      { alpha: 0.85 * t, glowScale: 0.35, passes: 2 });
     NEON.ring(ctx, marker.x, marker.y, 9, 1.1, 'player',
-      { alpha: 0.42 * viewBlend, dash: [3, 5], passes: 2 });
+      { alpha: 0.42 * t, dash: [3, 5], passes: 2 });
+    ctx.restore();
   }
   return true;
 }

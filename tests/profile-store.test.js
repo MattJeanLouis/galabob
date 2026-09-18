@@ -23,6 +23,35 @@ test('cree un profil versionne sans inventer de vaisseau jouable', () => {
   assert.deepEqual(profile.unlocks.ships, []);
 });
 
+test('memorise le point de vue et ignore une valeur inconnue', () => {
+  const storage = memoryStorage();
+  const store = new ProfileStore(storage);
+  store.load();
+  assert.equal(store.data.viewMode, 'flat', 'vue a plat par defaut');
+
+  assert.equal(store.setViewMode('perspective'), 'perspective');
+  assert.equal(store.data.viewMode, 'perspective');
+  assert.ok(storage.value('galabob.profile'), 'le choix doit etre ecrit');
+
+  // Une valeur inconnue ne doit pas laisser la vue dans un etat indefini.
+  assert.equal(store.setViewMode('n\'importe quoi'), 'flat');
+  assert.equal(store.data.viewMode, 'flat');
+});
+
+test('un profil ancien sans point de vue retombe sur la vue a plat', () => {
+  const storage = memoryStorage({
+    'galabob.profile': JSON.stringify({
+      schemaVersion: PROFILE_SCHEMA_VERSION,
+      selectedMode: 'arcade',
+      modes: { arcade: { highScore: 10, highestStage: 3 } }
+    })
+  });
+  const store = new ProfileStore(storage);
+  const profile = store.load();
+  assert.equal(profile.viewMode, 'flat');
+  assert.equal(profile.modes.arcade.highScore, 10, 'le reste du profil survit');
+});
+
 test('importe le meilleur score historique sans le perdre', () => {
   const storage = memoryStorage({ highScore: '163370' });
   const store = new ProfileStore(storage);

@@ -11,6 +11,9 @@ export function createDefaultProfile() {
     schemaVersion: PROFILE_SCHEMA_VERSION,
     selectedMode: 'arcade',
     selectedShip: null,
+    // Point de vue des stages 2D : 'flat' (historique) ou 'perspective'.
+    // Mémorisé pour que le joueur retrouve sa caméra d'une partie à l'autre.
+    viewMode: 'flat',
     unlocks: {
       ships: []
     },
@@ -51,6 +54,7 @@ function normalizeProfile(value, legacyHighScore) {
     schemaVersion: PROFILE_SCHEMA_VERSION,
     selectedMode: typeof source.selectedMode === 'string' ? source.selectedMode : defaults.selectedMode,
     selectedShip: ships.includes(source.selectedShip) ? source.selectedShip : (ships[0] || null),
+    viewMode: source.viewMode === 'perspective' ? 'perspective' : 'flat',
     unlocks: { ...sourceUnlocks, ships },
     modes
   };
@@ -106,6 +110,13 @@ export class ProfileStore {
     if (!this.data.selectedShip) this.data.selectedShip = id;
     this.save();
     return this.data.unlocks.ships;
+  }
+
+  /** Mémorise le point de vue ('flat' | 'perspective'). */
+  setViewMode(mode) {
+    this.data.viewMode = mode === 'perspective' ? 'perspective' : 'flat';
+    this.save();
+    return this.data.viewMode;
   }
 
   selectShip(id) {
