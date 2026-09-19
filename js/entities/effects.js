@@ -483,6 +483,68 @@ function updateExplosions(deltaTime) {
 /* -----------------------------------------------------------------------------
  *  DESSIN DES EXPLOSIONS
  * -------------------------------------------------------------------------- */
+/** Les trois formes d'effet qui se tracent en une primitive (tout sauf les
+ *  étincelles, qui se mettent en lot). UNE seule vérité : `drawExplosions` et la
+ *  vue en perspective passent tous deux par ici. */
+function traceFxSimple(c, p, k) {
+  switch (p.kind) {
+    case FX_SHOCK: {
+      const a = Math.pow(k, 1.9) * p.alpha;
+      const th = Math.max(0.3, p.w * Math.pow(k, 0.8));
+      NEON.ring(c, p.x, p.y, p.r, th, p.col,
+                { alpha: a, glowScale: 0.85, passes: 3 });
+      return true;
+    }
+
+    case FX_FLASH: {
+      const t = 1 - k;
+      const r = p.r + (p.r2 - p.r) * smoothstep(t);
+      NEON.dot(c, p.x, p.y, r, p.col, { alpha: Math.pow(k, 0.9), glowScale: 1.0 });
+      return true;
+    }
+
+    case FX_RESIDUE: {
+      const t = 1 - k;
+      const r = p.r + (p.r2 - p.r) * t;
+      NEON.dot(c, p.x, p.y, r, p.col,
+               { alpha: p.alpha * k * k, glowScale: 1.35 });
+      return true;
+    }
+
+    default: return false;
+  }
+}
+
+/** UNE étincelle AJOUTÉE AU LOT courant — le chemin de la vue à plat. */
+function addFxSpark(p, k) {
+  const a = k > 0.55 ? 1 : k / 0.55;
+  const len = Math.min(46, Math.hypot(p.vx, p.vy) * 0.052 + p.w * 0.9);
+  const nx = p.vx, ny = p.vy;
+  const inv = 1 / (Math.hypot(nx, ny) || 1);
+  const b = fxBatchGet(p.col, fxBucket(a), fxWidthClass(p.w * (0.55 + 0.45 * k)));
+  b.path.moveTo(p.x - nx * inv * len, p.y - ny * inv * len);
+  b.path.lineTo(p.x, p.y);
+}
+
+/** UNE étincelle tracée seule : on se sert du lot comme d'une passe unique, donc
+ *  la géométrie et les quatre passes restent EXACTEMENT celles du chemin à plat. */
+function traceFxSpark(c, p, k) {
+  fxBatchBegin();
+  addFxSpark(p, k);
+  fxBatchFlush(c, null, 0);
+}
+
+/** UNE particule d'effet, seule. La vue en perspective projette chaque particule
+ *  à SA profondeur : elles ne partagent donc plus le même repère, et le lot
+ *  n'aurait plus de sens. Le tracé, lui, est rigoureusement le même. */
+function drawExplosionParticle(c, p) {
+  if (!c || !p || p.alive === false || p.delay > 0) return false;
+  const k = p.life / p.maxLife;
+  if (!(k > 0)) return false;
+  if (p.kind === FX_SPARK) { traceFxSpark(c, p, k); return true; }
+  return traceFxSimple(c, p, k);
+}
+
 function drawExplosions() {
   const c = ctx;
   if (!c || !explosions.length) return;
@@ -497,44 +559,10 @@ function drawExplosions() {
     const k = p.life / p.maxLife;          // 1 → 0
     if (k <= 0) continue;
 
-    switch (p.kind) {
-
-      case FX_SPARK: {
-        // L'étincelle est un segment orienté par sa vitesse : plus elle va
-        // vite, plus elle s'étire. Aucun gradient, tracé mis en lot.
-        const a = k > 0.55 ? 1 : k / 0.55;
-        const len = Math.min(46, Math.hypot(p.vx, p.vy) * 0.052 + p.w * 0.9);
-        const nx = p.vx, ny = p.vy;
-        const inv = 1 / (Math.hypot(nx, ny) || 1);
-        const b = fxBatchGet(p.col, fxBucket(a), fxWidthClass(p.w * (0.55 + 0.45 * k)));
-        b.path.moveTo(p.x - nx * inv * len, p.y - ny * inv * len);
-        b.path.lineTo(p.x, p.y);
-        break;
-      }
-
-      case FX_SHOCK: {
-        const a = Math.pow(k, 1.9) * p.alpha;
-        const th = Math.max(0.3, p.w * Math.pow(k, 0.8));
-        NEON.ring(c, p.x, p.y, p.r, th, p.col,
-                  { alpha: a, glowScale: 0.85, passes: 3 });
-        break;
-      }
-
-      case FX_FLASH: {
-        const t = 1 - k;
-        const r = p.r + (p.r2 - p.r) * smoothstep(t);
-        NEON.dot(c, p.x, p.y, r, p.col, { alpha: Math.pow(k, 0.9), glowScale: 1.0 });
-        break;
-      }
-
-      case FX_RESIDUE: {
-        const t = 1 - k;
-        const r = p.r + (p.r2 - p.r) * t;
-        NEON.dot(c, p.x, p.y, r, p.col,
-                 { alpha: p.alpha * k * k, glowScale: 1.35 });
-        break;
-      }
-    }
+    // Les étincelles restent mises en lot : elles sont minuscules et très
+    // nombreuses, les tracer une par une coûterait quatre passes chacune.
+    if (p.kind === FX_SPARK) { addFxSpark(p, k); continue; }
+    traceFxSimple(c, p, k);
   }
 
   // Étincelles : 4 strokes par lot + report dans la traînée persistante.
@@ -657,6 +685,44 @@ function updateDebris(deltaTime) {
   }
 }
 
+/** UN éclat de carlingue AJOUTÉ AU LOT courant — le chemin de la vue à plat. */
+function addDebrisPiece(d) {
+  const k = d.life / d.maxLife;
+  const a = k > 0.6 ? 1 : k / 0.6;
+  const s = d.size * (0.55 + 0.45 * k);
+  const cs = Math.cos(d.rot), sn = Math.sin(d.rot);
+  const b = fxBatchGet(d.col, fxBucket(a), fxWidthClass(1 + s * 0.12));
+  const p = b.path;
+
+  if (d.shape === DEBRIS_TRIANGLE) {
+    p.moveTo(d.x + (-s * cs - s * sn), d.y + (-s * sn + s * cs));
+    p.lineTo(d.x + (s * cs), d.y + (s * sn));
+    p.lineTo(d.x + (-s * cs + s * sn), d.y + (-s * sn - s * cs));
+    p.closePath();
+  } else if (d.shape === DEBRIS_QUAD) {
+    const h = s * 0.62;
+    p.moveTo(d.x + (-h * cs - h * sn), d.y + (-h * sn + h * cs));
+    p.lineTo(d.x + (h * cs - h * sn), d.y + (h * sn + h * cs));
+    p.lineTo(d.x + (h * cs + h * sn), d.y + (h * sn - h * cs));
+    p.lineTo(d.x + (-h * cs + h * sn), d.y + (-h * sn - h * cs));
+    p.closePath();
+  } else {
+    // Éclat : un simple segment, le plus vectoriel de tous.
+    p.moveTo(d.x - s * cs, d.y - s * sn);
+    p.lineTo(d.x + s * cs, d.y + s * sn);
+  }
+}
+
+/** UN éclat tracé seul — la vue en perspective projette chaque débris à sa
+ *  propre profondeur, donc ils ne partagent plus le même repère. */
+function drawDebrisPiece(c, d) {
+  if (!c || !d || d.alive === false || !d.col) return false;
+  fxBatchBegin();
+  addDebrisPiece(d);
+  fxBatchFlush(c, null, 0);
+  return true;
+}
+
 function drawDebris() {
   const c = ctx;
   if (!c || !debris.length) return;
@@ -666,31 +732,7 @@ function drawDebris() {
   for (let i = 0; i < debris.length; i++) {
     const d = debris[i];
     if (!d || d.alive === false || !d.col) continue;
-
-    const k = d.life / d.maxLife;
-    const a = k > 0.6 ? 1 : k / 0.6;
-    const s = d.size * (0.55 + 0.45 * k);
-    const cs = Math.cos(d.rot), sn = Math.sin(d.rot);
-    const b = fxBatchGet(d.col, fxBucket(a), fxWidthClass(1 + s * 0.12));
-    const p = b.path;
-
-    if (d.shape === DEBRIS_TRIANGLE) {
-      p.moveTo(d.x + (-s * cs - s * sn), d.y + (-s * sn + s * cs));
-      p.lineTo(d.x + (s * cs), d.y + (s * sn));
-      p.lineTo(d.x + (-s * cs + s * sn), d.y + (-s * sn - s * cs));
-      p.closePath();
-    } else if (d.shape === DEBRIS_QUAD) {
-      const h = s * 0.62;
-      p.moveTo(d.x + (-h * cs - h * sn), d.y + (-h * sn + h * cs));
-      p.lineTo(d.x + (h * cs - h * sn), d.y + (h * sn + h * cs));
-      p.lineTo(d.x + (h * cs + h * sn), d.y + (h * sn - h * cs));
-      p.lineTo(d.x + (-h * cs + h * sn), d.y + (-h * sn - h * cs));
-      p.closePath();
-    } else {
-      // Éclat : un simple segment, le plus vectoriel de tous.
-      p.moveTo(d.x - s * cs, d.y - s * sn);
-      p.lineTo(d.x + s * cs, d.y + s * sn);
-    }
+    addDebrisPiece(d);
   }
 
   fxBatchFlush(c, fxTrailCtx(), 0.16);
@@ -892,32 +934,38 @@ function updateScorePopups(deltaTime) {
   }
 }
 
+/** UN popup de score. Extrait pour que la vue en perspective le trace à sa
+ *  propre profondeur — sinon « +500 » apparaîtrait à la même taille au fond et
+ *  au contact. */
+function drawScorePopup(c, p) {
+  if (!c || !p) return;
+  if (p.alive === undefined) popupNormalize(p);
+  if (p.alive === false) return;
+
+  const k = p.life / p.maxLife;                 // 1 → 0
+  const age = p.maxLife - p.life;
+
+  // Apparition : un pop élastique court, puis retour à l'échelle nominale.
+  let scale;
+  if (age < 0.09) scale = lerp(0.45, 1.16, smoothstep(age / 0.09));
+  else scale = lerp(1.16, 1, smoothstep(clamp((age - 0.09) / 0.16, 0, 1)));
+
+  const alpha = k > 0.45 ? 1 : k / 0.45;
+  const size = p.size * scale;
+
+  fxText(c, p.text, p.x, p.y, p.col, size, alpha * 0.95, 0.26 + p.mult * 0.012);
+
+  if (p.mult > 1) {
+    fxText(c, '×' + p.mult, p.x, p.y + size * 0.8, p.col, size * 0.58, alpha * 0.9, 0.3);
+  }
+}
+
 function drawScorePopups() {
   const c = ctx;
   if (!c || !scorePopups.length) return;
 
   for (let i = 0; i < scorePopups.length; i++) {
-    const p = scorePopups[i];
-    if (!p) continue;
-    if (p.alive === undefined) popupNormalize(p);
-    if (p.alive === false) continue;
-
-    const k = p.life / p.maxLife;                 // 1 → 0
-    const age = p.maxLife - p.life;
-
-    // Apparition : un pop élastique court, puis retour à l'échelle nominale.
-    let scale;
-    if (age < 0.09) scale = lerp(0.45, 1.16, smoothstep(age / 0.09));
-    else scale = lerp(1.16, 1, smoothstep(clamp((age - 0.09) / 0.16, 0, 1)));
-
-    const alpha = k > 0.45 ? 1 : k / 0.45;
-    const size = p.size * scale;
-
-    fxText(c, p.text, p.x, p.y, p.col, size, alpha * 0.95, 0.26 + p.mult * 0.012);
-
-    if (p.mult > 1) {
-      fxText(c, '×' + p.mult, p.x, p.y + size * 0.8, p.col, size * 0.58, alpha * 0.9, 0.3);
-    }
+    drawScorePopup(c, scorePopups[i]);
   }
 }
 

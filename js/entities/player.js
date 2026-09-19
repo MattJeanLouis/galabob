@@ -1771,6 +1771,7 @@ function drawMuzzleFlashes(c) {
  *  et utilisable depuis la console de debug.
  * ========================================================================== */
 window.player = player;
+window.drawPlayer = drawPlayer;
 window.drawClassicPlayerHull = drawClassicPlayerHull;
 window.drawInterceptorPlayerHull = drawInterceptorPlayerHull;
 window.drawBastionPlayerHull = drawBastionPlayerHull;

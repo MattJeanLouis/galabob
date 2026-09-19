@@ -1989,6 +1989,11 @@ window.ENEMY_TYPES = ENEMY_TYPES;
 window.createFormation = createFormation;
 window.updateEnemies = updateEnemies;
 window.drawEnemies = drawEnemies;
+/* UN ennemi, et de quoi le préparer. La vue en perspective trace chaque ennemi
+ * à SA position projetée : elle a donc besoin du tracé unitaire, pas de la
+ * passe complète (qui dessine tout le monde au même endroit du plan). */
+window.drawEnemyShip = drawEnemyShip;
+window.ensureEnemyRuntime = ensureEnemyRuntime;
 
 /** Dessine la silhouette ennemie ORIGINALE dans un canvas arbitraire.
  *  La poursuite 3D s'en sert comme texture de billboard : aucune seconde

@@ -758,6 +758,113 @@ function _powerUpShapePoints(def, r) {
   }
 }
 
+/** UN module en vol : halo pulsant + cage + lettre + noyau.
+ *  Extrait de la passe pour que la vue en perspective le trace à SA profondeur :
+ *  sans cela, deux bonus de profondeurs différentes auraient la même taille. */
+function drawPowerUp(c, tr, p, t) {
+  if (!c || !p) return;
+  const def = p.def || (p.def = powerUpDef(p.type));
+  const col = PALETTE.get(def.color);
+  const cx = p.x + p.width / 2;
+  const cy = p.y + p.height / 2;
+
+  // ANNEAU DE CAPTURE : il se referme, montrant le temps restant pour
+  // appuyer. Sans ce repère, l'échec passerait pour un bug — le geste doit
+  // être LISIBLE avant d'être exigeant.
+  if (p.capture != null) {
+    const fenetre = Number(TEMPO.POWERUP_CAPTURE_MS) || 420;
+    const reste = Math.max(0, 1 - p.capture / fenetre);
+    const r = 16 + reste * 34;
+    NEON.ring(c, cx, cy, r, 2.2, 'playerCore',
+      { alpha: 0.35 + reste * 0.5, passes: 3, composite: 'lighter' });
+    NEON.ring(c, cx, cy, r * 0.62, 1.4, def.color,
+      { alpha: 0.5 + reste * 0.4, dash: [4, 3], dashOffset: -t * 90, passes: 2,
+        composite: 'lighter' });
+    NEON.text(c, 'ESPACE', cx, cy - r - 12, 'playerCore',
+      { size: 12, align: 'center', alpha: 0.5 + reste * 0.5, glowScale: 0.4 });
+  }
+  const r = p.width / 2;
+  const pulse = 1 + 0.11 * Math.sin(t * 6.4 + (p.phase || 0));
+  const alpha = p.magnet ? 1 : 0.94;
+
+  // Traînée : sillage vertical, plus long quand le module est aspiré.
+  if (tr) {
+    NEON.line(tr, cx, cy, cx - (p.vx || 0) * 0.012, cy - (p.magnet ? 26 : 14),
+              col, 2.4, { alpha: p.magnet ? 0.45 : 0.26, passes: 2 });
+  }
+
+  c.save();
+  c.translate(cx, cy);
+
+  // Halo de fond, non tourné : l'objet doit se voir de loin, et PULSER.
+  const halo = 0.26 + 0.14 * Math.sin(t * 5.1 + (p.phase || 0) * 1.7);
+  NEON.dot(c, 0, 0, r * 0.42 * pulse, 'reward.common', { alpha: halo, glowScale: 1.25 });
+
+  // Signature universelle de BUTIN : double cercle vert continu et quatre
+  // encoches. La couleur interne continue d'indiquer la famille du bonus,
+  // mais cette couronne dit d'abord « objet bénéfique » — même en vision
+  // périphérique ou sans perception rouge/vert fiable.
+  NEON.ring(c, 0, 0, r * 1.44, 1.5, 'reward.common', {
+    alpha: 0.54 + 0.12 * Math.sin(t * 5.1), passes: 2, halo: false
+  });
+  for (let mark = 0; mark < 4; mark++) {
+    const ma = mark * Math.PI / 2;
+    NEON.line(c, Math.cos(ma) * r * 1.58, Math.sin(ma) * r * 1.58,
+                 Math.cos(ma) * r * 1.86, Math.sin(ma) * r * 1.86,
+              'reward.common', 1.6, { alpha: 0.68, passes: 2, halo: false });
+  }
+
+  // --- la CAGE : forme vectorielle propre au type ------------------------
+  c.save();
+  c.rotate(p.spin || 0);
+  c.scale(pulse, pulse);
+
+  NEON.shape(c, _powerUpShapePoints(def, r), col, 1.7, {
+    alpha: alpha, fill: true, fillAlpha: 0.11, glowScale: 0.9, passes: 3
+  });
+
+  // Rayons du soleil (bombe) : la seule forme qui déborde de sa cage.
+  const rays = def.shape && def.shape.rays;
+  if (rays) {
+    for (let k = 0; k < rays; k++) {
+      const a = k * Math.PI * 2 / rays + t * 0.9;
+      NEON.line(c, Math.cos(a) * r * 1.05, Math.sin(a) * r * 1.05,
+                   Math.cos(a) * r * 1.55, Math.sin(a) * r * 1.55,
+                col, 1.4, { alpha: alpha * 0.7, passes: 3 });
+    }
+  }
+
+  // Marqueurs orbitaux : leur NOMBRE est un indice de plus.
+  const pips = def.pips == null ? 3 : def.pips;
+  for (let k = 0; k < pips; k++) {
+    const a = k * (Math.PI * 2 / Math.max(1, pips));
+    NEON.dot(c, Math.cos(a) * r * 1.34, Math.sin(a) * r * 1.34, 1.4, col,
+             { alpha: alpha * 0.8 });
+  }
+  c.restore();
+
+  // Anneau contre-rotatif OR des bonus rares : la rareté reste un second
+  // niveau d'information, sous la signature verte commune à tout le butin.
+  if (def.rare) {
+    NEON.ring(c, 0, 0, r * 1.72 + 1.5 * Math.sin(t * 4.3), 1.1, 'reward.rare', {
+      alpha: alpha * 0.42, dash: [4, 7], dashOffset: t * 34, passes: 2, halo: false
+    });
+  }
+
+  // --- la LETTRE : redondance de lecture, toujours d'aplomb -------------
+  if (def.letter) {
+    NEON.text(c, def.letter, 0, 0.5, col, {
+      size: Math.round(r * 1.15),
+      align: 'center',
+      baseline: 'middle',
+      alpha: alpha,
+      glowScale: 0.8
+    });
+  }
+
+  c.restore();
+}
+
 /** Un module en vol : halo pulsant + cage + lettre + noyau. */
 function drawPowerUps() {
   const c = ctx;
@@ -765,109 +872,7 @@ function drawPowerUps() {
   const tr = _powerUpTrailCtx();
 
   for (let i = 0; i < powerUps.length; i++) {
-    const p = powerUps[i];
-    if (!p) continue;
-
-    const def = p.def || (p.def = powerUpDef(p.type));
-    const col = PALETTE.get(def.color);
-    const cx = p.x + p.width / 2;
-    const cy = p.y + p.height / 2;
-
-    // ANNEAU DE CAPTURE : il se referme, montrant le temps restant pour
-    // appuyer. Sans ce repère, l'échec passerait pour un bug — le geste doit
-    // être LISIBLE avant d'être exigeant.
-    if (p.capture != null) {
-      const fenetre = Number(TEMPO.POWERUP_CAPTURE_MS) || 420;
-      const reste = Math.max(0, 1 - p.capture / fenetre);
-      const r = 16 + reste * 34;
-      NEON.ring(c, cx, cy, r, 2.2, 'playerCore',
-        { alpha: 0.35 + reste * 0.5, passes: 3, composite: 'lighter' });
-      NEON.ring(c, cx, cy, r * 0.62, 1.4, def.color,
-        { alpha: 0.5 + reste * 0.4, dash: [4, 3], dashOffset: -FRAME.time * 90, passes: 2,
-          composite: 'lighter' });
-      NEON.text(c, 'ESPACE', cx, cy - r - 12, 'playerCore',
-        { size: 12, align: 'center', alpha: 0.5 + reste * 0.5, glowScale: 0.4 });
-    }
-    const r = p.width / 2;
-    const pulse = 1 + 0.11 * Math.sin(t * 6.4 + (p.phase || 0));
-    const alpha = p.magnet ? 1 : 0.94;
-
-    // Traînée : sillage vertical, plus long quand le module est aspiré.
-    if (tr) {
-      NEON.line(tr, cx, cy, cx - (p.vx || 0) * 0.012, cy - (p.magnet ? 26 : 14),
-                col, 2.4, { alpha: p.magnet ? 0.45 : 0.26, passes: 2 });
-    }
-
-    c.save();
-    c.translate(cx, cy);
-
-    // Halo de fond, non tourné : l'objet doit se voir de loin, et PULSER.
-    const halo = 0.26 + 0.14 * Math.sin(t * 5.1 + (p.phase || 0) * 1.7);
-    NEON.dot(c, 0, 0, r * 0.42 * pulse, 'reward.common', { alpha: halo, glowScale: 1.25 });
-
-    // Signature universelle de BUTIN : double cercle vert continu et quatre
-    // encoches. La couleur interne continue d'indiquer la famille du bonus,
-    // mais cette couronne dit d'abord « objet bénéfique » — même en vision
-    // périphérique ou sans perception rouge/vert fiable.
-    NEON.ring(c, 0, 0, r * 1.44, 1.5, 'reward.common', {
-      alpha: 0.54 + 0.12 * Math.sin(t * 5.1), passes: 2, halo: false
-    });
-    for (let mark = 0; mark < 4; mark++) {
-      const ma = mark * Math.PI / 2;
-      NEON.line(c, Math.cos(ma) * r * 1.58, Math.sin(ma) * r * 1.58,
-                   Math.cos(ma) * r * 1.86, Math.sin(ma) * r * 1.86,
-                'reward.common', 1.6, { alpha: 0.68, passes: 2, halo: false });
-    }
-
-    // --- la CAGE : forme vectorielle propre au type ------------------------
-    c.save();
-    c.rotate(p.spin || 0);
-    c.scale(pulse, pulse);
-
-    NEON.shape(c, _powerUpShapePoints(def, r), col, 1.7, {
-      alpha: alpha, fill: true, fillAlpha: 0.11, glowScale: 0.9, passes: 3
-    });
-
-    // Rayons du soleil (bombe) : la seule forme qui déborde de sa cage.
-    const rays = def.shape && def.shape.rays;
-    if (rays) {
-      for (let k = 0; k < rays; k++) {
-        const a = k * Math.PI * 2 / rays + t * 0.9;
-        NEON.line(c, Math.cos(a) * r * 1.05, Math.sin(a) * r * 1.05,
-                     Math.cos(a) * r * 1.55, Math.sin(a) * r * 1.55,
-                  col, 1.4, { alpha: alpha * 0.7, passes: 3 });
-      }
-    }
-
-    // Marqueurs orbitaux : leur NOMBRE est un indice de plus.
-    const pips = def.pips == null ? 3 : def.pips;
-    for (let k = 0; k < pips; k++) {
-      const a = k * (Math.PI * 2 / Math.max(1, pips));
-      NEON.dot(c, Math.cos(a) * r * 1.34, Math.sin(a) * r * 1.34, 1.4, col,
-               { alpha: alpha * 0.8 });
-    }
-    c.restore();
-
-    // Anneau contre-rotatif OR des bonus rares : la rareté reste un second
-    // niveau d'information, sous la signature verte commune à tout le butin.
-    if (def.rare) {
-      NEON.ring(c, 0, 0, r * 1.72 + 1.5 * Math.sin(t * 4.3), 1.1, 'reward.rare', {
-        alpha: alpha * 0.42, dash: [4, 7], dashOffset: t * 34, passes: 2, halo: false
-      });
-    }
-
-    // --- la LETTRE : redondance de lecture, toujours d'aplomb -------------
-    if (def.letter) {
-      NEON.text(c, def.letter, 0, 0.5, col, {
-        size: Math.round(r * 1.15),
-        align: 'center',
-        baseline: 'middle',
-        alpha: alpha,
-        glowScale: 0.8
-      });
-    }
-
-    c.restore();
+    drawPowerUp(c, tr, powerUps[i], t);
   }
 
   drawBombWaves(c);
@@ -889,103 +894,148 @@ function drawPowerUpFeedback() {
  *  La gerbe change de dessin selon l'EMPLACEMENT : arme (éclats radiaux),
  *  bouclier (hexagone qui se referme), mod (anneau pointillé), instantané
  *  (double détonation). Le ressenti dit déjà ce qu'on vient de gagner. */
+/** UNE gerbe de ramassage. Extrait pour que la vue en perspective la trace à la
+ *  profondeur du ramassage — c'est le retour immédiat du geste, il ne doit pas
+ *  apparaître à contretemps. */
+function drawPowerUpPickup(c, fx) {
+  if (!c || !fx) return;
+  const k = clamp(fx.life / fx.max, 0, 1);
+  const e = 1 - k;                       // 0 → 1 au fil de l'effet
+  const def = powerUpDef(fx.type);
+  const col = PALETTE.get(def.color);
+  const big = def.impact || 1;
+
+  NEON.ring(c, fx.x, fx.y, 6 + e * 64 * big, 2.4 * k, col, { alpha: k * 0.75, passes: 3 });
+  NEON.ring(c, fx.x, fx.y, 2 + e * 34 * big, 1.4 * k, 'debris', { alpha: k * 0.55, passes: 2 });
+
+  if (fx.slot === 'shield') {
+    // Une coque hexagonale se referme sur le point de ramassage.
+    const r = 46 * k + 10;
+    const pts = _polyPoints(r, 6, e * 1.2);
+    NEON.shape(c, pts, col, 1.8 * k + 0.3, { alpha: k * 0.7, passes: 3 });
+
+  } else if (fx.slot === 'mod') {
+    // Anneau pointillé qui se resserre : une DURÉE vient de démarrer.
+    NEON.ring(c, fx.x, fx.y, 52 * k + 8, 1.6, col, {
+      alpha: k * 0.7, dash: [5, 8], dashOffset: e * 60, passes: 3
+    });
+
+  } else {
+    // Armes et instantanés : six éclats radiaux.
+    const spokes = fx.slot === 'instant' ? 10 : 6;
+    for (let s = 0; s < spokes; s++) {
+      const a = s * Math.PI * 2 / spokes + e * 0.9;
+      const r0 = 8 + e * 30 * big, r1 = r0 + 10 * k * big;
+      NEON.line(c,
+        fx.x + Math.cos(a) * r0, fx.y + Math.sin(a) * r0,
+        fx.x + Math.cos(a) * r1, fx.y + Math.sin(a) * r1,
+        col, 1.6, { alpha: k * 0.7, passes: 3 });
+    }
+  }
+
+  if (fx.label) {
+    NEON.text(c, fx.label, fx.x, fx.y - 22 - e * 14, col, {
+      size: 15,
+      align: 'center',
+      baseline: 'middle',
+      alpha: k
+    });
+  }
+}
+
 function drawPowerUpPickups(c) {
   for (let i = 0; i < powerUpPickups.length; i++) {
-    const fx = powerUpPickups[i];
-    const k = clamp(fx.life / fx.max, 0, 1);
-    const e = 1 - k;                       // 0 → 1 au fil de l'effet
-    const def = powerUpDef(fx.type);
-    const col = PALETTE.get(def.color);
-    const big = def.impact || 1;
+    drawPowerUpPickup(c, powerUpPickups[i]);
+  }
+}
 
-    NEON.ring(c, fx.x, fx.y, 6 + e * 64 * big, 2.4 * k, col, { alpha: k * 0.75, passes: 3 });
-    NEON.ring(c, fx.x, fx.y, 2 + e * 34 * big, 1.4 * k, 'debris', { alpha: k * 0.55, passes: 2 });
+/** UNE onde de bombe. Extraite pour que la vue en perspective la trace à sa
+ *  propre profondeur : l'anneau doit grandir en s'approchant de l'œil. */
+function drawBombWave(c, w) {
+  if (!c || !w) return;
+  const k = clamp(w.age / w.life, 0, 1);
+  const f = 1 - k;                              // énergie restante
 
-    if (fx.slot === 'shield') {
-      // Une coque hexagonale se referme sur le point de ramassage.
-      const r = 46 * k + 10;
-      const pts = _polyPoints(r, 6, e * 1.2);
-      NEON.shape(c, pts, col, 1.8 * k + 0.3, { alpha: k * 0.7, passes: 3 });
+  // Front principal : large au départ, fin à la sortie de l'écran.
+  NEON.ring(c, w.x, w.y, w.r, 2 + 7 * f, '#ffffff', { alpha: 0.20 + 0.70 * f, passes: 4 });
+  NEON.ring(c, w.x, w.y, w.r * 0.86, 1.4 + 3 * f, '#8affff', { alpha: 0.45 * f, passes: 3 });
+  NEON.ring(c, w.x, w.y, w.r * 0.70, 1.0 + 2 * f, '#c86bff', { alpha: 0.30 * f, passes: 2 });
 
-    } else if (fx.slot === 'mod') {
-      // Anneau pointillé qui se resserre : une DURÉE vient de démarrer.
-      NEON.ring(c, fx.x, fx.y, 52 * k + 8, 1.6, col, {
-        alpha: k * 0.7, dash: [5, 8], dashOffset: e * 60, passes: 3
-      });
+  // Rayons : le souffle, pas seulement l'anneau.
+  const spokes = 18;
+  for (let s = 0; s < spokes; s++) {
+    const a = s * Math.PI * 2 / spokes + k * 0.5;
+    const r0 = w.r * 0.78, r1 = w.r * (1 + 0.06 * f);
+    NEON.line(c, w.x + Math.cos(a) * r0, w.y + Math.sin(a) * r0,
+                 w.x + Math.cos(a) * r1, w.y + Math.sin(a) * r1,
+              '#ffffff', 1.4, { alpha: 0.42 * f, passes: 2 });
+  }
 
-    } else {
-      // Armes et instantanés : six éclats radiaux.
-      const spokes = fx.slot === 'instant' ? 10 : 6;
-      for (let s = 0; s < spokes; s++) {
-        const a = s * Math.PI * 2 / spokes + e * 0.9;
-        const r0 = 8 + e * 30 * big, r1 = r0 + 10 * k * big;
-        NEON.line(c,
-          fx.x + Math.cos(a) * r0, fx.y + Math.sin(a) * r0,
-          fx.x + Math.cos(a) * r1, fx.y + Math.sin(a) * r1,
-          col, 1.6, { alpha: k * 0.7, passes: 3 });
-      }
-    }
-
-    if (fx.label) {
-      NEON.text(c, fx.label, fx.x, fx.y - 22 - e * 14, col, {
-        size: 15,
-        align: 'center',
-        baseline: 'middle',
-        alpha: k
-      });
-    }
+  // Cœur incandescent du premier tiers.
+  if (k < 0.35) {
+    const kk = 1 - k / 0.35;
+    NEON.dot(c, w.x, w.y, 10 + 46 * kk, '#ffffff', { alpha: kk * 0.55, glowScale: 2.2 });
   }
 }
 
 /** L'onde de la bombe : un front blanc qui traverse tout l'écran. */
 function drawBombWaves(c) {
   for (let i = 0; i < bombWaves.length; i++) {
-    const w = bombWaves[i];
-    const k = clamp(w.age / w.life, 0, 1);
-    const f = 1 - k;                              // énergie restante
+    drawBombWave(c, bombWaves[i]);
+  }
+}
 
-    // Front principal : large au départ, fin à la sortie de l'écran.
-    NEON.ring(c, w.x, w.y, w.r, 2 + 7 * f, '#ffffff', { alpha: 0.20 + 0.70 * f, passes: 4 });
-    NEON.ring(c, w.x, w.y, w.r * 0.86, 1.4 + 3 * f, '#8affff', { alpha: 0.45 * f, passes: 3 });
-    NEON.ring(c, w.x, w.y, w.r * 0.70, 1.0 + 2 * f, '#c86bff', { alpha: 0.30 * f, passes: 2 });
+/** UN « ×2 » de kill. Extrait pour que la vue en perspective le trace à la
+ *  profondeur du kill : un ×2 au fond ne doit pas avoir la taille du contact. */
+function drawMultiplierSpark(c, s) {
+  if (!c || !s) return;
+  const col = PALETTE.get(powerUpDef('multiplicateur').color);
+  const k = clamp(s.life / s.max, 0, 1);
+  NEON.text(c, '×2', s.x, s.y, col, {
+    size: 13, align: 'center', baseline: 'middle', alpha: k * 0.9
+  });
+  NEON.ring(c, s.x, s.y, 8 + (1 - k) * 16, 1.1, col, { alpha: k * 0.4, passes: 2 });
+}
 
-    // Rayons : le souffle, pas seulement l'anneau.
-    const spokes = 18;
-    for (let s = 0; s < spokes; s++) {
-      const a = s * Math.PI * 2 / spokes + k * 0.5;
-      const r0 = w.r * 0.78, r1 = w.r * (1 + 0.06 * f);
-      NEON.line(c, w.x + Math.cos(a) * r0, w.y + Math.sin(a) * r0,
-                   w.x + Math.cos(a) * r1, w.y + Math.sin(a) * r1,
-                '#ffffff', 1.4, { alpha: 0.42 * f, passes: 2 });
-    }
-
-    // Cœur incandescent du premier tiers.
-    if (k < 0.35) {
-      const kk = 1 - k / 0.35;
-      NEON.dot(c, w.x, w.y, 10 + 46 * kk, '#ffffff', { alpha: kk * 0.55, glowScale: 2.2 });
-    }
+/** Le « ×2 » posé sur chaque kill pendant le multiplicateur. */
+function drawMultiplierSparks(c) {
+  if (!multiplierSparks.length) return;
+  for (let i = 0; i < multiplierSparks.length; i++) {
+    drawMultiplierSpark(c, multiplierSparks[i]);
   }
 }
 
 /** RALENTI : l'écran doit DIRE qu'il est au ralenti, sans masquer l'action.
- *  Bandes horizontales lentes + anneau de champ autour du vaisseau. */
-function drawSlowMotionOverlay(c) {
+ *  Les BANDES sont un repère d'ÉCRAN : elles ne se projettent pas, sinon elles
+ *  se plieraient avec le décor. Le CHAMP, lui, entoure le vaisseau : il appartient
+ *  au monde et se projette. Les deux vont donc de pair, mais séparément. */
+function _slowMotionK() {
   const ts = (typeof playerTimeScale === 'function') ? playerTimeScale() : 1;
-  if (ts > 0.985) return;
-
+  if (ts > 0.985) return 0;
   const floor = (typeof PLAYER_RALENTI_SCALE === 'number') ? PLAYER_RALENTI_SCALE : 0.34;
-  const k = clamp((1 - ts) / Math.max(0.001, 1 - floor), 0, 1);
+  return clamp((1 - ts) / Math.max(0.001, 1 - floor), 0, 1);
+}
+
+/** Bandes de balayage, repère ÉCRAN. */
+function drawSlowMotionBands(c) {
+  const k = _slowMotionK();
+  if (k <= 0) return;
   const col = powerUpColor('ralenti');
   const t = FRAME.time;
-
-  // Bandes de balayage : lentes, espacées, discrètes.
   const step = 96;
   const off = (t * 26) % step;
   for (let y = -off; y < CANVAS_HEIGHT; y += step) {
     NEON.line(c, 0, y, CANVAS_WIDTH, y, col, 1.0, { alpha: k * 0.10, passes: 2 });
   }
+}
 
-  // Champ autour du vaisseau : c'est LUI qui est resté à vitesse normale.
+/** Champ autour du vaisseau, repère MONDE : c'est LUI qui est resté à vitesse
+ *  normale. */
+function drawSlowMotionRing(c) {
+  const k = _slowMotionK();
+  if (k <= 0) return;
+  const col = powerUpColor('ralenti');
+  const t = FRAME.time;
   if (typeof player !== 'undefined' && player) {
     const transitShip = (typeof gameState !== 'undefined' && gameState === 'transit')
       ? window.TRANSIT?.debug?.().markers?.ship : null;
@@ -1003,18 +1053,9 @@ function drawSlowMotionOverlay(c) {
   }
 }
 
-/** Le « ×2 » posé sur chaque kill pendant le multiplicateur. */
-function drawMultiplierSparks(c) {
-  if (!multiplierSparks.length) return;
-  const col = PALETTE.get(powerUpDef('multiplicateur').color);
-  for (let i = 0; i < multiplierSparks.length; i++) {
-    const s = multiplierSparks[i];
-    const k = clamp(s.life / s.max, 0, 1);
-    NEON.text(c, '×2', s.x, s.y, col, {
-      size: 13, align: 'center', baseline: 'middle', alpha: k * 0.9
-    });
-    NEON.ring(c, s.x, s.y, 8 + (1 - k) * 16, 1.1, col, { alpha: k * 0.4, passes: 2 });
-  }
+function drawSlowMotionOverlay(c) {
+  drawSlowMotionBands(c);
+  drawSlowMotionRing(c);
 }
 
 /* =============================================================================
@@ -1078,6 +1119,9 @@ window.createPowerUp = createPowerUp;
 window.applyPowerUp = applyPowerUp;
 window.updatePowerUpFeedback = updatePowerUpFeedback;
 window.drawPowerUpFeedback = drawPowerUpFeedback;
+/* Tracé UNITAIRE d'un module en vol : la vue en perspective projette chaque
+ * bonus à sa propre profondeur, donc elle a besoin de le tracer seul. */
+window.drawPowerUp = drawPowerUp;
 window.triggerPowerUpBomb = triggerPowerUpBomb;
 window.ensurePowerUpBridges = ensurePowerUpBridges;
 

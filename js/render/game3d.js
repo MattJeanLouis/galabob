@@ -1,643 +1,507 @@
 /**
- * ÉTAT ET PISTE (à lire avant de reprendre cette vue)
- * -----------------------------------------------------------------------------
- * Le rendu actuel passe par des SPRITES : l'art du jeu rendu dans un canvas,
- * puis affiché comme image. Le joueur l'a jugé, à juste titre, « moche et pas
- * fidèle à la vue de base » — et le diagnostic est exact : on a gardé l'ART
- * mais pas sa MATIÈRE. Un sprite plat n'a ni l'épaisseur ni la lumière des
- * tracés vectoriels néon multi-passes du mode classique.
- *
- * LA PISTE À SUIVRE : projeter les positions, mais laisser LE JEU DESSINER ses
- * propres formes dans le tampon émissif, avec leur halo et leurs passes :
- *
- *     drawEnemyShip(ctx, e, FRAME.time)   (après ensureEnemyRuntime(e))
- *     drawPlayer()                        (coque, traînées, réacteur)
- *     BOSS.drawWorld(ctx)                 (via BOSS.viewport() pour l'échelle)
- *
- * en transformant le contexte pour chaque entité :
- *     translate(position projetée) · scale(pixelsParUnite) · translate(-centre logique)
- *
- * DEUX PIÈGES DÉJÀ IDENTIFIÉS, à ne pas repayer :
- *  1. L'ÉCHELLE. La bonne mesure est « pixels par unité du monde » à une
- *     profondeur donnée : projeter (x, z) et (x + 10, z) et diviser par 10.
- *     Mesurer un déplacement en PROFONDEUR (l'ancien calcul, + 40 sur z) n'a
- *     aucun sens et réduisait l'art à presque rien.
- *  2. `ensureEnemyRuntime(e)` est OBLIGATOIRE avant `drawEnemyShip` : sans lui,
- *     `e.phase` vaut undefined, la taille devient NaN et l'ennemi n'est pas
- *     tracé du tout.
- *
- * Un troisième défaut n'a PAS été trouvé : la scène restait vide malgré ces
- * deux corrections. Le rendu actuel par sprites reste en place parce qu'une vue
- * vide est pire qu'une vue imparfaite — mais c'est un état de transition.
- */
-import * as THREE from 'three';
-
-/**
  * MENACE — la seconde caméra des stages 2D.
  *
- * Même stage, même simulation, même art : ce module ne fait que REGARDER la
- * scène 2D autrement. Le plan du jeu (x/y de la simulation) devient un plan
- * horizontal vu de derrière le vaisseau. Monter à l'écran, c'est aller vers
- * l'horizon.
+ * MÊME STAGE, MÊME SIMULATION, MÊME ART. Ce module ne fait que REGARDER la
+ * scène 2D autrement : le plan du jeu (les `x`/`y` de la simulation) devient un
+ * plan horizontal vu de derrière le vaisseau, et « monter » à l'écran devient
+ * « aller vers l'horizon ». Rien n'est simulé ici : le module LIT l'état du jeu,
+ * le projette, et laisse LE JEU dessiner ses propres formes.
  *
- * Rien n'est simulé ici : le module lit l'état du jeu, le projette, et rend un
- * canvas transparent que la scène 2D compose dans son propre pipeline NEON.
- * Les hitboxes, les dégâts et la progression restent donc EXACTEMENT ceux du
- * mode classique — c'est la promesse de la vue.
+ * LA FIDÉLITÉ VIENT DE LÀ. Chaque élément est tracé par SA fonction habituelle
+ * (`drawEnemyShip`, `drawPlayer`, `BOSS.drawWorld`, `drawPlayerBullet`…),
+ * simplement à travers une transformation par entité :
  *
- * L'art vient du jeu lui-même (`drawEnemyBillboard`, `drawXxxPlayerHull`) : on
- * ne redessine rien, on donne simplement de la profondeur aux mêmes tracés.
+ *     translate(position projetée) · scale(pixels par unité du monde)
+ *                                  · translate(-centre logique de l'entité)
+ *
+ * Un tracé néon garde donc exactement son halo, ses passes additives et sa
+ * couleur : c'est le même appel de fonction, pas une seconde interprétation.
+ *
+ * CE QUI A ÉTÉ ESSAYÉ ET ABANDONNÉ — pour ne pas le repayer :
+ *
+ *  1. LES SPRITES. Rendre l'art du jeu dans un canvas pour l'afficher comme
+ *     image garde la FORME mais perd la MATIÈRE : un halo néon n'est pas une
+ *     image plate. Le joueur l'a jugé, à juste titre, « moche et pas fidèle ».
+ *
+ *  2. UN CIEL À PART. Le vrai ciel du jeu — nébuleuse, étoiles, planète — est
+ *     déjà peint par `drawStars()`. Le redessiner sur un plan Three.js donnait
+ *     deux ciels concurrents, et le nôtre restait VIDE (mesuré en jeu : zéro
+ *     image d'astre reçue sur des centaines de frames). Conséquence heureuse :
+ *     la vue n'a plus AUCUNE dépendance WebGL — elle compose avec le décor du
+ *     jeu, qui est déjà à l'écran. Il n'y a donc plus de « vue indisponible ».
+ *
+ *  3. UN SOL QUADRILLÉ. Il n'existe dans aucune autre vue du jeu. Un décor
+ *     étranger, donc — c'est précisément ce qui faisait dire « un autre jeu »
+ *     plutôt que « une autre caméra sur le même ».
+ *
+ * LA PROJECTION EST ÉCRITE ICI, À LA MAIN, et c'est délibéré : le modèle
+ * sténopé tient en quinze lignes, il ne dépend d'aucune librairie, et il se
+ * vérifie sans navigateur. `pixelsParUnite` vaut `(hauteur/2) / (profondeur ×
+ * tan(fov/2))` : c'est la même valeur à l'horizontale et à la verticale, donc
+ * une entité garde ses proportions en toutes circonstances.
  */
 const GAME3D = (() => {
-  // Résolution des sprites : 192 px (taille de la poursuite) se lavait après
-  // bloom en vue rapprochée. On rend plus grand, quitte à redimensionner.
-  const SPRITE_PX = 512;
-  const MAX_ENEMIES = 48;
-  const MAX_SHOTS = 160;
-  const MAX_ENEMY_SHOTS = 96;
-  const MAX_FX = 64;
-  const BOSS_PX = 512;
-
-  // --- placement de la caméra ------------------------------------------------
-  // La caméra se place AU-DESSUS de la position du vaisseau dans le plan :
-  // elle suit donc la profondeur sans jamais laisser le vaisseau sortir du
-  // cadre. C'est ce qui rend les deux vues superposables sans rééquilibrage.
-  // Champ serré, caméra BASSE et PROCHE : on veut être derrière le vaisseau,
-  // pas le survoler. Une caméra haute et parfaitement centrée donnait une vue
-  // d'observation sans sensation de vitesse.
+  /* ---------------------------------------------------------------------
+   *  PLACEMENT DE LA CAMÉRA
+   *  Elle se place AU-DESSUS et DERRIÈRE le vaisseau, et elle RETARDE sur ses
+   *  déplacements : c'est ce mou qui donne la sensation d'être à bord. Une
+   *  caméra collée et parfaitement centrée donnait une vue d'observation inerte.
+   * ------------------------------------------------------------------- */
   const CAM_HEIGHT_RATIO = 0.30;   // altitude = hauteur du canvas × ce ratio
   const CAM_BACK_RATIO = 0.55;     // recul derrière le vaisseau
-  const CAM_LAG = 0.14;            // le cadre RETARDE sur les déplacements
+  const CAM_BACK_MIN = 240;        // plancher : sans lui, le ratio n'agissait plus
+  const CAM_LAG_X = 0.14;          // le cadre retarde sur les déplacements
   const CAM_ROLL = 0.10;           // inclinaison du cadre quand on vire
   const CAM_LOOK_RATIO = 0.60;     // distance du point visé devant le vaisseau
   const CAM_LOOK_Y = 30;           // hauteur du point visé
+
   // Champ LARGE (mesuré) : à 44° la caméra rapprochée laissait 60 % du bord
-  // gauche hors cadre — une menace pouvait tirer sans être vue. À 60°, le
-  // vaisseau reste bas (72 %) ET le bord redevient visible sur 2/3 de sa
-  // profondeur. La perspective y gagne aussi en intensité.
+  // latéral hors cadre — une menace pouvait tirer sans être vue. À 60°, le
+  // vaisseau reste bas dans le cadre ET le bord redevient visible sur les deux
+  // tiers de sa profondeur.
   const FOV = 60;
-  const CAM_FAR = 18000;           // plan lointain de la caméra (rien à voir au-delà)
+  const TAN_HALF_FOV = Math.tan(FOV * Math.PI / 360);
 
-  // Ciel : l'astre du jeu, posé loin derrière, rafraîchi une frame sur N.
-  const SKY_DISTANCE = 4200;
-  const SKY_W = 640;
-  const SKY_H = 320;
-  const SKY_SPAN = 12000;
-  const SKY_EVERY = 3;
+  const NEAR_DEPTH = 60;     // en deçà la projection diverge : on ne trace pas
+  const MAX_SCALE = 8;       // garde-fou mémoire sur les rayons projetés
+  const MAX_FX = 96;         // particules d'effet projetées
+  const MAX_ENEMIES = 48;
+  const MAX_SHOTS = 160;
+  const MAX_ENEMY_SHOTS = 96;
+  const CULL_MARGIN = 160;   // px hors cadre au-delà desquels on ne trace pas
+  const BOSS_MARGIN = 520;   // le boss est GRAND : son centre peut être dehors
+                             // et sa coque encore à l'image
 
-
-  // Le sol ne s'étend que sur la zone réellement survolée : un plan plus large
-  // devenait un aplat laiteux qui noyait la scène dans le bloom.
-  const GROUND_HALF_WIDTH = 2600;
-  const GROUND_DEPTH = 15000;
-
-  // Les vaisseaux joueur du contenu, par identifiant de rendu.
-  const SHIP_RENDERERS = {
-    'legacy-vector': 'drawClassicPlayerHull',
-    'interceptor-vector': 'drawInterceptorPlayerHull',
-    'bastion-vector': 'drawBastionPlayerHull'
-  };
-
-  const ENEMY_TYPES = ['normal', 'shooter', 'fast', 'armored', 'elite'];
-
-  let renderer = null;
-  let scene = null;
-  let camera = null;
-  let sky = null;
-  let skyTexture = null;
-  let skyFrame = -999;
-  let skyPainted = 0;      // nombre de fois où une image d'astre a été posée
-  let failed = false;
-  let failureReason = null;
-  let available = false;
   let width = 0;
   let height = 0;
+  let camX = 0;              // position lissée du cadre (le retard)
+  let camRoll = 0;           // inclinaison lissée du cadre
+  let marks = null;          // liste d'affichage de la frame courante
 
-  let shipSprite = null;
-  let shipTextures = {};
-  let enemySprites = [];
-  let enemyTextures = {};
-  let shotSprites = [];
-  let bossSprite = null;
-  let bossTexture = null;
-  let bossCanvas = null;
-  let enemyShotSprites = [];
-  let shotTexture = null;
-  let enemyShotTextures = {};
-  let camX = 0;        // position lissée du cadre (retard)
-  let camRoll = 0;     // inclinaison lissée
+  // Base de la caméra, en nombres nus : aucune librairie n'intervient dans la
+  // projection, donc elle se teste en quelques millisecondes, sans navigateur.
+  let eyeX = 0, eyeY = 0, eyeZ = 0;     // l'œil
+  let fwdX = 0, fwdY = 0, fwdZ = 0;     // avant (direction du regard)
+  let rgtX = 0, rgtY = 0, rgtZ = 0;     // droite de l'écran
+  let upX = 0, upY = 0, upZ = 0;        // haut de l'écran
+  let ppmBase = 0;                      // (hauteur / 2) / tan(fov / 2)
+  let shipX = 0, shipZ = 0;             // le vaisseau, dans le plan du jeu
 
-  function paletteColor(key, fallback) {
-    try {
-      const trip = PALETTE.get(key);
-      return (trip && trip.glow) || fallback;
-    } catch (e) { return fallback; }
-  }
+  const planeX = (x) => x - width / 2;
+  const planeZ = (y) => y - height / 2;
 
-  /** Un canvas de sprite dessiné par l'ART DU JEU lui-même. */
-  function spriteCanvas(draw) {
-    const canvas = document.createElement('canvas');
-    canvas.width = canvas.height = SPRITE_PX;
-    const context = canvas.getContext('2d');
-    try { draw(context); } catch (e) { /* un sprite raté ne casse pas la vue */ }
-    return canvas;
-  }
-
-  function textureFrom(canvas) {
-    const texture = new THREE.CanvasTexture(canvas);
-    texture.colorSpace = THREE.SRGBColorSpace;
-    return texture;
-  }
-
-  function buildShipTextures() {
-    shipTextures = {};
-    for (const type in SHIP_RENDERERS) {
-      const fn = window[SHIP_RENDERERS[type]];
-      if (typeof fn !== 'function') continue;
-      shipTextures[type] = [];
-      for (let frame = 0; frame < 4; frame++) {
-        const canvas = spriteCanvas((context) => {
-          // Le canvas est en pixels : l'art attend un repère centré, à
-          // l'échelle du vaisseau 2D (40 × 22), donc on agrandit.
-          const scale = SPRITE_PX / 64;
-          context.save();
-          context.translate(SPRITE_PX / 2, SPRITE_PX / 2);
-          context.scale(scale, scale);
-          fn(context, { alpha: 1, time: frame / 4, charge: 0.25 });
-          context.restore();
-        });
-        shipTextures[type].push(textureFrom(canvas));
-      }
-    }
-  }
-
-  function buildEnemyTextures() {
-    enemyTextures = {};
-    if (typeof window.drawEnemyBillboard !== 'function') return;
-    for (const type of ENEMY_TYPES) {
-      enemyTextures[type] = [];
-      for (let frame = 0; frame < 4; frame++) {
-        const canvas = spriteCanvas((context) => {
-          window.drawEnemyBillboard(context, type, SPRITE_PX, SPRITE_PX, frame / 4, type.length + frame * 0.7);
-        });
-        enemyTextures[type].push(textureFrom(canvas));
-      }
-    }
-  }
-
-  /** Une texture de trait lumineux, colorée par la palette du jeu. */
-  function buildBoltTexture(colorKey) {
-    const canvas = spriteCanvas((context) => {
-      const trip = (() => { try { return PALETTE.get(colorKey); } catch (e) { return null; } })();
-      const core = (trip && trip.core) || '#ffffff';
-      const glow = (trip && trip.glow) || '#ff2b55';
-      const c = SPRITE_PX / 2;
-      const g = context.createRadialGradient(c, c, 0, c, c, SPRITE_PX * 0.5);
-      g.addColorStop(0, core);
-      g.addColorStop(0.22, glow);
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      context.fillStyle = g;
-      context.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
-    });
-    return textureFrom(canvas);
-  }
-
-  function buildEnemyShotTextures() {
-    enemyShotTextures = {
-      normal: buildBoltTexture('bulletEnemy'),
-      shooter: buildBoltTexture('bulletEnemyShooter'),
-      fast: buildBoltTexture('bulletEnemyFast'),
-      armored: buildBoltTexture('bulletEnemyArmored'),
-      sniper: buildBoltTexture('bulletEnemySniper')
-    };
-  }
-
-  function buildShotTexture() {
-    const canvas = spriteCanvas((context) => {
-      const glow = paletteColor('bulletPlayer', '#7df9ff');
-      const core = paletteColor('playerCore', '#ffffff');
-      const c = SPRITE_PX / 2;
-      const g = context.createRadialGradient(c, c, 0, c, c, SPRITE_PX * 0.5);
-      g.addColorStop(0, core);
-      g.addColorStop(0.25, glow);
-      g.addColorStop(1, 'rgba(0,0,0,0)');
-      context.fillStyle = g;
-      context.fillRect(0, 0, SPRITE_PX, SPRITE_PX);
-    });
-    shotTexture = textureFrom(canvas);
-  }
-
-  /** AUCUN sol, AUCUNE grille : ces éléments n'existent dans aucune autre vue
-   *  du jeu. Ils ajoutaient un décor étranger — et c'est précisément ce qui
-   *  donnait l'impression d'un AUTRE JEU plutôt que d'un autre point de vue sur
-   *  le même. L'espace du jeu (son décor céleste) suffit à porter la scène. */
-  function buildGround() { /* volontairement vide */ }
-
-  /** Le CIEL de la vue en perspective : la planète filaire du jeu.
-   *  C'est le MÊME astre que celui du décor 2D (`SPACE3D`, déjà utilisé par
-   *  `backdrop.js`), donc la même ambiance sous un autre angle — au lieu d'un
-   *  fond inventé. `SPACE3D.frame()` attend `x`, `y` et `radius` en PIXELS de
-   *  la toile : sans eux l'astre ne se dessinait pas (essayé, capturé,
-   *  invisible — c'est ce qui manquait). */
-  function buildSky() {
-    if (typeof window.SPACE3D === 'undefined' || typeof window.SPACE3D.frame !== 'function') {
-      sky = null;
-      return;
-    }
-    const canvas = document.createElement('canvas');
-    canvas.width = SKY_W; canvas.height = SKY_H;
-    skyTexture = textureFrom(canvas);
-    const mesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(1, 1),
-      new THREE.MeshBasicMaterial({
-        map: skyTexture, transparent: true, depthWrite: false, depthTest: false,
-        toneMapped: false
-      })
-    );
-    mesh.position.set(0, 0, -SKY_DISTANCE);
-    mesh.scale.set(SKY_SPAN, SKY_SPAN * (SKY_H / SKY_W), 1);
-    mesh.renderOrder = -20;
-    scene.add(mesh);
-    sky = mesh;
-  }
-
-  /** Redemande une image d'astre au jeu, une frame sur N (il tourne lentement). */
-  function refreshSky() {
-    if (!sky || !skyTexture) return;
-    const frameId = (typeof FRAME !== 'undefined' && FRAME) ? (FRAME.frame | 0) : 0;
-    if (frameId - skyFrame < SKY_EVERY) return;
-    skyFrame = frameId;
-    try {
-      const theme = (typeof BACKDROP !== 'undefined' && BACKDROP && BACKDROP.themeIndex)
-        ? BACKDROP.themeIndex() : 0;
-      const image = window.SPACE3D.frame({
-        width: SKY_W, height: SKY_H, themeIndex: theme,
-        // L'astre occupe le centre haut de la toile, à bonne taille.
-        x: SKY_W * 0.5, y: SKY_H * 0.42, radius: SKY_H * 0.40
-      });
-      if (!image) return;
-      const cible = skyTexture.image;
-      if (cible && cible.getContext) {
-        cible.getContext('2d').drawImage(image, 0, 0, SKY_W, SKY_H);
-        skyTexture.needsUpdate = true;
-        skyPainted++;
-      }
-    } catch (e) { /* le ciel ne doit jamais casser la vue */ }
-  }
-
-  function init() {
-    if (available) return true;
-    if (failed) return false;
-    try {
-      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true, powerPreference: 'high-performance' });
-      renderer.setClearAlpha(0);
-      renderer.setPixelRatio(1);
-      renderer.toneMapping = THREE.NoToneMapping;
-      renderer.outputColorSpace = THREE.SRGBColorSpace;
-
-      scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(FOV, 1, 1, CAM_FAR);
-
-      buildGround();
-      buildSky();
-      buildShipTextures();
-      buildEnemyTextures();
-      buildShotTexture();
-      buildEnemyShotTextures();
-
-      // -- vaisseau ----------------------------------------------------------
-      // Les sprites sont ADDITIFS : c'est ce qui les fait briller comme les
-      // tracés néon du mode 2D au lieu de rester des images plates et sombres.
-      shipSprite = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: shipTextures['legacy-vector'] ? shipTextures['legacy-vector'][0] : null,
-        transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
-        blending: THREE.AdditiveBlending
-      }));
-      shipSprite.scale.set(64, 38, 1);
-      shipSprite.renderOrder = 30;
-      scene.add(shipSprite);
-
-      // -- ennemis -----------------------------------------------------------
-      for (let i = 0; i < MAX_ENEMIES; i++) {
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-          transparent: true, depthTest: false, depthWrite: false, toneMapped: false,
-          blending: THREE.AdditiveBlending
-        }));
-        sprite.visible = false;
-        sprite.renderOrder = 20;
-        scene.add(sprite);
-        enemySprites.push(sprite);
-      }
-
-      // -- boss : sa coque 3D, rendue par le module boss lui-même -----------
-      bossCanvas = document.createElement('canvas');
-      bossCanvas.width = bossCanvas.height = BOSS_PX;
-      bossTexture = textureFrom(bossCanvas);
-      bossSprite = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: bossTexture, transparent: true, depthTest: false, depthWrite: false,
-        toneMapped: false
-      }));
-      bossSprite.visible = false;
-      bossSprite.renderOrder = 22;
-      scene.add(bossSprite);
-
-      // -- projectiles ennemis : gros et colorés, ils doivent SE VOIR --------
-      for (let i = 0; i < MAX_ENEMY_SHOTS; i++) {
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: enemyShotTextures.normal, transparent: true, depthTest: false,
-          depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false
-        }));
-        sprite.visible = false;
-        sprite.renderOrder = 26;
-        scene.add(sprite);
-        enemyShotSprites.push(sprite);
-      }
-
-      // -- projectiles du joueur --------------------------------------------
-      for (let i = 0; i < MAX_SHOTS; i++) {
-        const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
-          map: shotTexture, transparent: true, depthTest: false, depthWrite: false,
-          blending: THREE.AdditiveBlending, toneMapped: false
-        }));
-        sprite.visible = false;
-        sprite.renderOrder = 25;
-        scene.add(sprite);
-        shotSprites.push(sprite);
-      }
-
-      available = true;
-      return true;
-    } catch (error) {
-      failed = true;
-      failureReason = (error && error.message) ? error.message : String(error);
-      console.info('GAME3D : repli sur la vue classique —', failureReason);
-      return false;
-    }
-  }
-
-  function resize(w, h) {
-    if (!init()) return;
-    if (w === width && h === height) return;
+  /** Pose la caméra pour cette frame, et calcule sa base. */
+  function placeCamera(snapshot, w, h) {
     width = w; height = h;
-    renderer.setSize(w, h, false);
-    camera.aspect = w / Math.max(1, h);
-    camera.updateProjectionMatrix();
-  }
+    const player = snapshot.player || { x: w / 2, y: h * 0.85, width: 40, height: 22 };
+    shipX = planeX(player.x + (player.width || 40) / 2);
+    shipZ = planeZ(player.y + (player.height || 22) / 2);
 
-  /** Une frame d'animation lisible : l'art 2D attend un temps normalisé. */
-  function animFrame(speed) {
-    const t = (typeof FRAME !== 'undefined' && FRAME && typeof FRAME.time === 'number') ? FRAME.time : 0;
-    return Math.floor((t * (speed || 8)) % 4) % 4;
-  }
+    const camHeight = h * CAM_HEIGHT_RATIO;
+    const camBack = Math.max(CAM_BACK_MIN, h * CAM_BACK_RATIO);
+    const lagX = shipX - camX;
+    camX += lagX * CAM_LAG_X;
+    camRoll += ((lagX / Math.max(200, w * 0.35)) * CAM_ROLL - camRoll) * 0.12;
 
-  function setSpriteFrame(sprite, textures, frame) {
-    if (!textures || !textures.length) return;
-    const material = sprite.material;
-    const wanted = textures[frame] || textures[0];
-    if (material.map !== wanted) { material.map = wanted; material.needsUpdate = true; }
+    // Le point visé est DEVANT le vaisseau : c'est lui qui fait qu'on regarde
+    // vers l'horizon, et le décalage `lagX` qui garde le vaisseau légèrement
+    // décentré quand on vire.
+    const lookX = camX + lagX * 0.35;
+    const lookZ = shipZ - h * CAM_LOOK_RATIO;
+
+    eyeX = camX; eyeY = camHeight; eyeZ = shipZ + camBack;
+
+    let ax = lookX - eyeX, ay = CAM_LOOK_Y - eyeY, az = lookZ - eyeZ;
+    const la = Math.hypot(ax, ay, az) || 1;
+    fwdX = ax / la; fwdY = ay / la; fwdZ = az / la;
+
+    // Le vecteur « haut » du cadre porte le roulis : `up` tourne autour de
+    // l'axe du regard, donc l'horizon s'incline dans les virages.
+    const upx = Math.sin(camRoll), upy = Math.cos(camRoll);
+    let sx = fwdY * 0 - fwdZ * upy;
+    let sy = fwdZ * upx - fwdX * 0;
+    let sz = fwdX * upy - fwdY * upx;
+    const ls = Math.hypot(sx, sy, sz) || 1;
+    rgtX = sx / ls; rgtY = sy / ls; rgtZ = sz / ls;
+
+    upX = rgtY * fwdZ - rgtZ * fwdY;
+    upY = rgtZ * fwdX - rgtX * fwdZ;
+    upZ = rgtX * fwdY - rgtY * fwdX;
+
+    ppmBase = (h * 0.5) / TAN_HALF_FOV;
   }
 
   /**
-   * Compose la vue. `snapshot` porte l'état du stage 2D :
-   *   { player, enemies, playerBullets, shipRenderer }
-   * @returns {{canvas: HTMLCanvasElement, markers: object}|null}
+   * Projette un point DU PLAN DE JEU (x, z — `z` est la profondeur, pas une
+   * hauteur) sur l'écran.
+   * @returns {{x:number,y:number,depth:number,scale:number}|null} null si le
+   * point est derrière l'œil : le projeter le ferait réapparaître à l'envers.
+   */
+  function project(x, z) {
+    const vx = x - eyeX, vy = -eyeY, vz = z - eyeZ;
+    const depth = vx * fwdX + vy * fwdY + vz * fwdZ;
+    if (!(depth > NEAR_DEPTH)) return null;
+    let k = ppmBase / depth;
+    if (!(k > 0)) return null;
+    if (k > MAX_SCALE) k = MAX_SCALE;
+    const side = vx * rgtX + vy * rgtY + vz * rgtZ;
+    const haut = vx * upX + vy * upY + vz * upZ;
+    return {
+      x: width * 0.5 + side * k,
+      y: height * 0.5 - haut * k,
+      depth,
+      scale: k
+    };
+  }
+
+  const horsCadre = (p, marge) => {
+    const m = marge == null ? CULL_MARGIN : marge;
+    return p.x < -m || p.x > width + m || p.y < -m || p.y > height + m;
+  };
+
+  /** Le centre logique d'une entité du plan : c'est autour de lui que l'art du
+   *  jeu se dessine, donc c'est lui que la transformation doit ramener au pixel
+   *  projeté. */
+  const centreX = (o) => o.x + (o.width || 0) / 2;
+  const centreZ = (o) => o.y + (o.height || 0) / 2;
+
+  /** Projette une entité du plan, avec le centre logique de son art. */
+  function projeterEntite(o) {
+    const p = project(planeX(centreX(o)), planeZ(centreZ(o)));
+    if (!p || horsCadre(p)) return null;
+    p.centreX = centreX(o);
+    p.centreZ = centreZ(o);
+    return p;
+  }
+
+  /** Projette une liste d'objets PONCTUELS (leur `x`/`y` EST leur centre) :
+   *  particules, débris, ondes, popups. L'objet est conservé pour que le jeu le
+   *  trace lui-même. */
+  function projeterPonctuels(liste, max, marge) {
+    const out = [];
+    if (!liste) return out;
+    for (let i = 0; i < liste.length && out.length < max; i++) {
+      const o = liste[i];
+      if (!o) continue;
+      const p = project(planeX(o.x), planeZ(o.y));
+      if (!p || horsCadre(p, marge)) continue;
+      p.centreX = o.x;
+      p.centreZ = o.y;
+      p.item = o;
+      out.push(p);
+    }
+    return out;
+  }
+
+  /* ---------------------------------------------------------------------
+   *  LA LISTE D'AFFICHAGE
+   *  Un seul tri, du plus LOIN au plus PRÈS, pour que la coque opaque du boss
+   *  ne passe pas devant un ennemi qui lui est antérieur. Le pool est réutilisé
+   *  d'une frame à l'autre : trier ne doit rien allouer.
+   * ------------------------------------------------------------------- */
+  const _poolEntrees = [];
+  const _poolOrdre = [];
+  let _poolUtilise = 0;
+
+  function ajouter(kind, entree) {
+    let item = _poolEntrees[_poolUtilise];
+    if (!item) { item = { kind: '', place: null }; _poolEntrees[_poolUtilise] = item; }
+    item.kind = kind;
+    item.place = entree;
+    _poolUtilise++;
+  }
+
+  /* ---------------------------------------------------------------------
+   *  LA FRAME
+   * ------------------------------------------------------------------- */
+
+  /**
+   * Compose la vue : pose la caméra et projette tout ce qui doit être vu.
+   * L'instantané porte l'état du stage 2D :
+   *   { player, enemies, playerBullets, enemyBullets, powerUps, explosions,
+   *     boss, shipRenderer }
+   * @returns {{markers: object}|null}
    */
   function frame(snapshot, w, h) {
-    if (!init()) return null;
-    // `resize()` sort tôt si la taille n'a pas changé : on la force ici, car
-    // `init()` peut avoir été appelé avant que `resize()` n'ait posé la
-    // moindre dimension. Sans cela le rendu restait dans un canvas par défaut.
-    width = -1; height = -1;
-    resize(w, h);
-    if (!snapshot) return null;
+    if (!snapshot || !(w > 0) || !(h > 0)) return null;
+    placeCamera(snapshot, w, h);
 
-    const planeX = (x) => x - w / 2;
-    const planeZ = (y) => y - h / 2;
-    const player = snapshot.player || { x: w / 2, y: h * 0.85, width: 40, height: 22 };
-    const px = planeX(player.x + (player.width || 40) / 2);
-    const pz = planeZ(player.y + (player.height || 22) / 2);
+    marks = {
+      ship: null, boss: null,
+      enemies: [], shots: [], incoming: [], powerups: [], explosions: [],
+      debris: [], bombWaves: [], pickups: [], sparks: [], popups: []
+    };
 
-    // --- caméra : DERRIÈRE le vaisseau, et elle RETARDE ---------------------
-    // Le cadre suit la position du vaisseau avec du mou et s'incline quand on
-    // vire : c'est ce décalage qui donne la sensation d'être à bord. Une caméra
-    // collée et parfaitement centrée donnait une vue d'observation inerte.
-    const camHeight = h * CAM_HEIGHT_RATIO;
-    const camBack = Math.max(240, h * CAM_BACK_RATIO);
-    const lagX = px - camX;
-    const lagTilt = player.tilt || 0;
-    camX += lagX * 0.14;
-    camRoll += ((lagX / Math.max(200, w * 0.35)) * CAM_ROLL - camRoll) * 0.12;
-    camera.position.set(camX, camHeight, pz + camBack);
-    const lookX = camX + lagX * 0.35;
-    // L'astre reste à distance fixe et suit le cadre : c'est un vrai fond.
-    if (sky) sky.position.set(camX, camHeight * 0.5, pz - SKY_DISTANCE);
-    refreshSky();
-    camera.up.set(Math.sin(camRoll), Math.cos(camRoll), 0);
-    camera.lookAt(lookX, CAM_LOOK_Y, pz - h * CAM_LOOK_RATIO);
-
-    // --- vaisseau : il s'incline, il recule, il pousse ----------------------
-    const rendererKey = snapshot.shipRenderer || 'legacy-vector';
-    const hullTextures = shipTextures[rendererKey] || shipTextures['legacy-vector'];
-    if (shipSprite) {
-      shipSprite.visible = true;
-      const kick = player.kick || 0;
-      const thrust = player.thrust == null ? 0.4 : player.thrust;
-      shipSprite.position.set(px, 6 + kick * 1.6, pz + kick * 2.2);
-      // Le roulis du vaisseau vient de SON inclinaison, pas de celle du cadre :
-      // le sol reste stable, le vaisseau vit.
-      shipSprite.material.rotation = -(player.tilt || 0) * 0.42;
-      const s = 1 + thrust * 0.10;
-      shipSprite.scale.set(70 * s, 42 * s, 1);
-      setSpriteFrame(shipSprite, hullTextures, animFrame(6));
-      const blink = (player.invulnerable && player.blink) ? 0.30 : 1;
-      shipSprite.material.opacity = blink;
+    // --- vaisseau ---------------------------------------------------------
+    // Il est le POINT DE VUE : le projeter sert à savoir où tracer son art, et
+    // à garder la même transformation que le reste.
+    const ship = project(shipX, shipZ);
+    if (ship) {
+      // Le centre logique est en coordonnées du MONDE (`drawPlayer` s'y place
+      // tout seul) : le confondre avec la coordonnée de plan décalait le
+      // vaisseau d'une demi-largeur d'écran.
+      ship.centreX = shipX + width / 2;
+      ship.centreZ = shipZ + height / 2;
+      ship.visible = true;
+      marks.ship = ship;
     }
 
     // --- ennemis ----------------------------------------------------------
     const enemies = snapshot.enemies || [];
-    let used = 0;
-    for (let i = 0; i < enemies.length && used < enemySprites.length; i++) {
+    for (let i = 0; i < enemies.length && marks.enemies.length < MAX_ENEMIES; i++) {
       const e = enemies[i];
       if (!e || e.isDeleted) continue;
-      const sprite = enemySprites[used++];
-      // Le sprite suit la taille réelle de l'ennemi, avec une marge : à cette
-      // distance, un sprite à l'échelle exacte devenait illisible.
-      const size = Math.max(34, Math.max(e.width || 32, e.height || 32) * 1.5);
-      sprite.visible = true;
-      sprite.position.set(planeX(e.x + (e.width || 0) / 2), 0, planeZ(e.y + (e.height || 0) / 2));
-      sprite.scale.set(size, size, 1);
-      setSpriteFrame(sprite, enemyTextures[e.type] || enemyTextures.normal, animFrame(8));
-      sprite.material.opacity = 1;
+      if (!isFinite(e.x) || !isFinite(e.y) || !(e.width > 0)) continue;
+      const p = projeterEntite(e);
+      if (!p) continue;
+      p.entity = e;
+      marks.enemies.push(p);
     }
-    for (let i = used; i < enemySprites.length; i++) enemySprites[i].visible = false;
 
-    // --- projectiles du joueur -------------------------------------------
-    const bullets = snapshot.playerBullets || [];
-    let shot = 0;
-    for (let i = 0; i < bullets.length && shot < shotSprites.length; i++) {
-      const b = bullets[i];
+    // --- projectiles ------------------------------------------------------
+    // Ils voyagent vers l'œil : leur taille DOIT suivre la profondeur, sinon un
+    // tir lointain et un tir au contact se lisent pareil.
+    const shots = snapshot.playerBullets || [];
+    for (let i = 0; i < shots.length && marks.shots.length < MAX_SHOTS; i++) {
+      const b = shots[i];
       if (!b) continue;
-      const sprite = shotSprites[shot++];
-      sprite.visible = true;
-      sprite.position.set(planeX(b.x + (b.width || 0) / 2), 2, planeZ(b.y + (b.height || 0) / 2));
-      const s = Math.max(10, (b.width || 3) * 6);
-      sprite.scale.set(s, s * 2.6, 1);
+      const largeur = b.width || 3, hauteur = b.drawH || b.height || 16;
+      const p = project(planeX(b.x + largeur / 2), planeZ(b.y + hauteur / 2));
+      if (!p || horsCadre(p)) continue;
+      p.centreX = b.x + largeur / 2; p.centreZ = b.y + hauteur / 2;
+      p.bullet = b;
+      marks.shots.push(p);
     }
-    for (let i = shot; i < shotSprites.length; i++) shotSprites[i].visible = false;
-
-    // --- projectiles ENNEMIS -------------------------------------------------
-    // Ils manquaient purement et simplement : en perspective on ne voyait pas
-    // ce qui arrivait. Gros, colorés par type, et additifs pour percer le fond.
-    const enemyBullets = snapshot.enemyBullets || [];
-    let incoming = 0;
-    for (let i = 0; i < enemyBullets.length && incoming < enemyShotSprites.length; i++) {
-      const b = enemyBullets[i];
+    const tirs = snapshot.enemyBullets || [];
+    for (let i = 0; i < tirs.length && marks.incoming.length < MAX_ENEMY_SHOTS; i++) {
+      const b = tirs[i];
       if (!b) continue;
-      const sprite = enemyShotSprites[incoming++];
-      const kind = b.kind || 'normal';
-      sprite.visible = true;
-      sprite.position.set(planeX(b.x + (b.width || 0) / 2), 3, planeZ(b.y + (b.height || 0) / 2));
-      const size = Math.max(26, (b.width || 5) * 7);
-      sprite.scale.set(size, size * 1.5, 1);
-      const tex = enemyShotTextures[kind] || enemyShotTextures.normal;
-      if (sprite.material.map !== tex) { sprite.material.map = tex; sprite.material.needsUpdate = true; }
-    }
-    for (let i = incoming; i < enemyShotSprites.length; i++) enemyShotSprites[i].visible = false;
-
-    renderer.render(scene, camera);
-
-    // --- marqueurs écran, pour que game.js trace les mêmes tracés néon -----
-    const aim = new THREE.Vector3();
-    // `z` est la PROFONDEUR de l'objet dans le plan — pas une hauteur. L'oublier
-    // projetait tous les repères à la même distance : un ennemi du fond et un
-    // ennemi proche tombaient sur le MÊME pixel, et les tracés néon (bonus,
-    // explosions, boss, repère du vaisseau) étaient tous décalés.
-    const toScreen = (x, z) => {
-      aim.set(x, 0, z).project(camera);
-      return { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
-    };
-    const shipMarker = toScreen(px, pz);
-    const enemyMarkers = [];
-    for (let i = 0; i < enemies.length; i++) {
-      const e = enemies[i];
-      if (!e || e.isDeleted) continue;
-      const ex = planeX(e.x + (e.width || 0) / 2), ez = planeZ(e.y + (e.height || 0) / 2);
-      const p = toScreen(ex, ez);
-      // Grossissement apparent : même calcul que pour les bonus, pour que les
-      // repères tracés par-dessus la scène respectent la profondeur.
-      aim.set(ex, 0, ez + 40).project(camera);
-      const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
-      enemyMarkers.push({
-        x: p.x, y: p.y + 2,
-        scale: Math.hypot(proche.x - p.x, proche.y - p.y) / 40
-      });
+      const largeur = b.width || 5, hauteur = b.drawH || b.height || 10;
+      const p = project(planeX(b.x + largeur / 2), planeZ(b.y + hauteur / 2));
+      if (!p || horsCadre(p)) continue;
+      p.centreX = b.x + largeur / 2; p.centreZ = b.y + hauteur / 2;
+      p.bullet = b;
+      p.rang = i;
+      marks.incoming.push(p);
     }
 
-    // --- bonus : ils doivent rester identifiables en perspective ------------
+    // --- bonus ------------------------------------------------------------
     const pickups = snapshot.powerUps || [];
-    const powerupMarkers = [];
     for (let i = 0; i < pickups.length; i++) {
       const p = pickups[i];
-      if (!p) continue;
-      const cx = planeX(p.x + (p.width || 0) / 2);
-      const cz = planeZ(p.y + (p.height || 0) / 2);
-      const centre = toScreen(cx, cz);
-      // Échelle : on projette le même point 40 unités plus près de l'œil.
-      aim.set(cx, 0, cz + 40).project(camera);
-      const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
-      const grossissement = Math.hypot(proche.x - centre.x, proche.y - centre.y) / 40;
-      powerupMarkers.push({
-        x: centre.x, y: centre.y,
-        scale: grossissement,
-        type: p.type || 'double',
-        def: p.def || null
-      });
+      if (!p || p.isDeleted) continue;
+      const q = projeterEntite(p);
+      if (!q) continue;
+      q.powerUp = p;
+      q.type = p.type || 'double';
+      marks.powerups.push(q);
     }
 
-    // --- explosions : les impacts doivent se voir là où ils ont lieu --------
-    // On ne projette que les particules qui PORTENT l'événement (flash, onde) :
-    // les étincelles, nombreuses et minuscules, ne se liraient pas.
-    const fx = snapshot.explosions || [];
-    const explosionMarkers = [];
-    for (let i = 0; i < fx.length && explosionMarkers.length < MAX_FX; i++) {
-      const p = fx[i];
-      if (!p || p.alive === false || !(p.life > 0) || !(p.r > 2)) continue;
-      const cx = planeX(p.x), cz = planeZ(p.y);
-      const centre = toScreen(cx, cz);
-      aim.set(cx, 0, cz + 40).project(camera);
-      const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
-      const grossissement = Math.hypot(proche.x - centre.x, proche.y - centre.y) / 40;
-      const part = Math.max(0, Math.min(1, p.life / Math.max(1, p.maxLife)));
-      explosionMarkers.push({
-        x: centre.x, y: centre.y,
-        r: p.r * grossissement,
-        alpha: Math.max(0, Math.min(1, (p.alpha == null ? 1 : p.alpha) * part)),
-        color: p.col || null
-      });
-    }
+    // --- explosions -------------------------------------------------------
+    // TOUTES les particules, étincelles comprises : c'est la gerbe entière qui
+    // dit « celui-là est mort », et elle doit se produire à SA profondeur.
+    marks.explosions = projeterPonctuels(snapshot.explosions, MAX_FX);
 
-    // --- boss : sa coque 3D, et de quoi lire sa vie sans quitter la vue -----
-    let bossMarker = null;
-    if (snapshot.boss) {
-      const b = snapshot.boss;
-      const bx = planeX(b.x), bz = planeZ(b.y);
-      const centre = toScreen(bx, bz);
-      aim.set(bx, 0, bz + 40).project(camera);
-      const proche = { x: (aim.x * 0.5 + 0.5) * w, y: (-aim.y * 0.5 + 0.5) * h };
-      const grossissement = Math.hypot(proche.x - centre.x, proche.y - centre.y) / 40;
+    // --- débris de carlingue ---------------------------------------------
+    marks.debris = projeterPonctuels(snapshot.debris, MAX_FX);
 
-      // La coque est COPIÉE dans notre texture : BOSS3D réutilise son canvas,
-      // on ne peut donc pas s'en servir directement comme texture.
-      if (bossSprite && bossCanvas && b.shell) {
-        try {
-          bossCanvas.getContext('2d').clearRect(0, 0, BOSS_PX, BOSS_PX);
-          bossCanvas.getContext('2d').drawImage(b.shell, 0, 0, BOSS_PX, BOSS_PX);
-          bossTexture.needsUpdate = true;
-          const taille = Math.max(48, (b.rayon || 90) * 2.6 * grossissement);
-          bossSprite.visible = true;
-          bossSprite.position.set(bx, 0, bz);
-          bossSprite.scale.set(taille, taille, 1);
-          bossSprite.material.opacity = Math.max(0, Math.min(1, b.alpha == null ? 1 : b.alpha));
-        } catch (e) { /* coque indisponible : le repère suffit */ }
-      } else if (bossSprite) {
-        bossSprite.visible = false;
+    // --- ondes de bombe ---------------------------------------------------
+    // Le souffle traverse tout l'écran : il doit grandir en s'approchant de
+    // l'œil, sinon la bombe perd son impact en perspective.
+    marks.bombWaves = projeterPonctuels(snapshot.bombWaves, 8, BOSS_MARGIN);
+
+    // --- retours de ramassage --------------------------------------------
+    marks.pickups = projeterPonctuels(snapshot.powerUpPickups, MAX_FX);
+    marks.sparks = projeterPonctuels(snapshot.multiplierSparks, MAX_FX);
+    marks.popups = projeterPonctuels(snapshot.scorePopups, MAX_FX);
+
+    // --- boss -------------------------------------------------------------
+    const b = snapshot.boss;
+    if (b) {
+      const centre = project(planeX(b.x), planeZ(b.y));
+      if (centre && !horsCadre(centre, BOSS_MARGIN)) {
+        centre.centreX = b.x;
+        centre.centreZ = b.y;
+        centre.rayon = Math.max(12, (b.rayon || 90) * centre.scale);
+        centre.hp = Math.max(0, Math.min(1, b.hp == null ? 1 : b.hp));
+        centre.color = b.color || null;
+        centre.phase = b.phase || 1;
+        marks.boss = centre;
       }
-
-      bossMarker = {
-        x: centre.x, y: centre.y,
-        r: Math.max(18, (b.rayon || 90) * grossissement),
-        hp: Math.max(0, Math.min(1, b.hp == null ? 1 : b.hp)),
-        color: b.color || null,
-        phase: b.phase || 1,
-        shell: !!(bossSprite && bossSprite.visible)
-      };
-    } else if (bossSprite) {
-      bossSprite.visible = false;
     }
 
-    return {
-      canvas: renderer.domElement,
-      markers: {
-        ship: { x: shipMarker.x, y: shipMarker.y, visible: true },
-        enemies: enemyMarkers,
-        powerups: powerupMarkers,
-        explosions: explosionMarkers,
-        boss: bossMarker
+    return { markers: marks };
+  }
+
+  /* ---------------------------------------------------------------------
+   *  LE TRACÉ
+   * ------------------------------------------------------------------- */
+
+  /** Amène le contexte sur une entité : son centre logique tombe sur le pixel
+   *  projeté, à l'échelle de sa profondeur. */
+  function cadreSur(c, place) {
+    c.translate(place.x, place.y);
+    c.scale(place.scale, place.scale);
+    c.translate(-place.centreX, -place.centreZ);
+  }
+
+  function traceUn(c, kind, place) {
+    switch (kind) {
+      case 'enemy': {
+        const e = place.entity;
+        if (typeof window.drawEnemyShip !== 'function') return;
+        if (typeof window.ensureEnemyRuntime === 'function' && !e._rt) window.ensureEnemyRuntime(e);
+        // Pas de traînée persistante ici : le tampon de traînées vit dans le
+        // repère du plan, une transformation par entité n'y aurait aucun sens.
+        window.drawEnemyShip(c, null, e, FRAME.time);
+        return;
       }
-    };
+      case 'boss': {
+        if (typeof BOSS === 'undefined' || !BOSS || typeof BOSS.drawWorld !== 'function') return;
+        BOSS.drawWorld(c);
+        return;
+      }
+      case 'shot': {
+        if (typeof window.drawPlayerBullet !== 'function') return;
+        window.drawPlayerBullet(c, null, place.bullet);
+        return;
+      }
+      case 'incoming': {
+        if (typeof window.drawEnemyBullet !== 'function') return;
+        window.drawEnemyBullet(c, null, place.bullet, place.rang, FRAME.time);
+        return;
+      }
+      case 'powerup': {
+        if (typeof window.drawPowerUp !== 'function') return;
+        window.drawPowerUp(c, null, place.powerUp, FRAME.time);
+        return;
+      }
+      case 'fx': {
+        if (typeof window.drawExplosionParticle !== 'function') return;
+        window.drawExplosionParticle(c, place.item);
+        return;
+      }
+      case 'debris': {
+        if (typeof window.drawDebrisPiece !== 'function') return;
+        window.drawDebrisPiece(c, place.item);
+        return;
+      }
+      case 'bomb': {
+        if (typeof window.drawBombWave !== 'function') return;
+        window.drawBombWave(c, place.item);
+        return;
+      }
+      case 'pickup': {
+        if (typeof window.drawPowerUpPickup !== 'function') return;
+        window.drawPowerUpPickup(c, place.item);
+        return;
+      }
+      case 'spark': {
+        if (typeof window.drawMultiplierSpark !== 'function') return;
+        window.drawMultiplierSpark(c, place.item);
+        return;
+      }
+      case 'popup': {
+        if (typeof window.drawScorePopup !== 'function') return;
+        window.drawScorePopup(c, place.item);
+        return;
+      }
+      case 'ship': {
+        if (typeof window.drawPlayer !== 'function') return;
+        window.drawPlayer();
+        return;
+      }
+      default: return;
+    }
+  }
+
+  /**
+   * Trace le monde par la caméra : les mêmes fonctions de dessin que la vue à
+   * plat, appliquées à la position projetée de chaque élément.
+   *
+   * À appeler DANS la scène émissive (`ctx`), entre `NEON.beginFrame()` et
+   * `NEON.endFrame()` : c'est ce qui lui donne le bloom, l'aberration et la
+   * vignette du mode classique.
+   * @returns {boolean} false si rien n'a pu être tracé.
+   */
+  function drawWorld(c) {
+    if (!c || !marks) return false;
+
+    _poolUtilise = 0;
+    for (let i = 0; i < marks.enemies.length; i++) ajouter('enemy', marks.enemies[i]);
+    if (marks.boss) ajouter('boss', marks.boss);
+    for (let i = 0; i < marks.shots.length; i++) ajouter('shot', marks.shots[i]);
+    for (let i = 0; i < marks.incoming.length; i++) ajouter('incoming', marks.incoming[i]);
+    for (let i = 0; i < marks.powerups.length; i++) ajouter('powerup', marks.powerups[i]);
+    for (let i = 0; i < marks.explosions.length; i++) ajouter('fx', marks.explosions[i]);
+    for (let i = 0; i < marks.debris.length; i++) ajouter('debris', marks.debris[i]);
+    for (let i = 0; i < marks.bombWaves.length; i++) ajouter('bomb', marks.bombWaves[i]);
+    for (let i = 0; i < marks.pickups.length; i++) ajouter('pickup', marks.pickups[i]);
+    for (let i = 0; i < marks.sparks.length; i++) ajouter('spark', marks.sparks[i]);
+    for (let i = 0; i < marks.popups.length; i++) ajouter('popup', marks.popups[i]);
+
+    // Du plus loin au plus près : `depth` est la distance à l'œil.
+    _poolOrdre.length = _poolUtilise;
+    for (let i = 0; i < _poolUtilise; i++) _poolOrdre[i] = _poolEntrees[i];
+    _poolOrdre.sort((a, b) => b.place.depth - a.place.depth);
+
+    for (let i = 0; i < _poolOrdre.length; i++) {
+      const item = _poolOrdre[i];
+      c.save();
+      cadreSur(c, item.place);
+      try { traceUn(c, item.kind, item.place); }
+      catch (err) { console.error('Vue en perspective : tracé ' + item.kind + ' impossible', err); }
+      c.restore();
+    }
+
+    // Le VAISSEAU en dernier : il est le plus proche de l'œil, et son art porte
+    // le noyau blanc qui EST sa hitbox. Il doit rester lisible par-dessus tout.
+    if (marks.ship) {
+      c.save();
+      cadreSur(c, marks.ship);
+      try { traceUn(c, 'ship', marks.ship); }
+      catch (err) { console.error('Vue en perspective : tracé du vaisseau impossible', err); }
+      c.restore();
+    }
+
+    // --- repères d'ÉCRAN ---------------------------------------------------
+    // Le ralenti pose des bandes de balayage dans le repère de l'ÉCRAN : les
+    // projeter les plierait avec le décor, alors qu'elles disent un état du jeu.
+    if (typeof window.drawSlowMotionBands === 'function') {
+      try { window.drawSlowMotionBands(c); } catch (err) { /* facultatif */ }
+    }
+    // Le champ de ralenti, lui, entoure le vaisseau : il appartient au monde.
+    if (marks.ship && typeof window.drawSlowMotionRing === 'function') {
+      c.save();
+      cadreSur(c, marks.ship);
+      try { window.drawSlowMotionRing(c); } catch (err) { /* facultatif */ }
+      c.restore();
+    }
+    return true;
   }
 
   return {
     frame,
-    isAvailable: () => init(),
+    drawWorld,
+    /**
+     * La vue ne dépend plus de WebGL : elle projette et laisse le jeu dessiner.
+     * Il n'y a donc plus de « vue indisponible » — et plus de repli à annoncer.
+     */
+    isAvailable: () => true,
     /** Dimensions réelles du rendu — sert au diagnostic de cadrage. */
-    debug: () => (renderer ? { width: renderer.domElement.width, height: renderer.domElement.height } : null),
-    /** Raison d'un éventuel repli, pour l'annoncer plutôt que de la subir. */
-    failureReason: () => failureReason,
-    /** État du ciel : présent ? combien d'images d'astre reçues ? */
-    skyInfo: () => ({ present: !!sky, textured: !!skyTexture, painted: skyPainted,
-      space3d: (typeof window.SPACE3D !== 'undefined') }),
-    reset() { /* rien à réinitialiser : la vue ne possède aucun état de jeu */ }
+    debug: () => ({ width, height }),
+    /** Cadrage courant, pour la mise au point depuis la console. */
+    view: () => ({
+      oeil: { x: eyeX, y: eyeY, z: eyeZ },
+      vaisseau: { x: shipX, z: shipZ },
+      ppm: ppmBase,
+      roulis: camRoll
+    }),
+    /** Projette un point du plan en pixels écran — diagnostic et tests. */
+    projectPoint: (x, z) => project(x - width / 2, z - height / 2),
+    reset() {
+      camX = 0; camRoll = 0; marks = null;
+    }
   };
 })();
 

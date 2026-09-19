@@ -1,47 +1,97 @@
 /**
  * Câblage de la VUE EN PERSPECTIVE des stages 2D.
  *
- * Deux régressions ont réellement coûté cher pendant la mise au point, et ce
- * fichier les garde :
- *   1. la branche de vue était placée APRÈS `drawStars()` : le décor céleste
- *      était peint par-dessus la vue 3D, ce qui donnait un fond bleu plein ;
- *   2. la vue pouvait rester active alors que le rendu 3D était indisponible,
- *      laissant un écran vide.
+ * Ce que cette vue promet, et que ce fichier verrouille :
+ *   1. MÊME STAGE, MÊME SIMULATION, MÊME ART. La vue ne redessine rien : elle
+ *      projette, et le jeu trace ses propres formes (`GAME3D.drawWorld`).
+ *   2. LE CIEL DU JEU EST CONSERVÉ. Il est peint AVANT la vue, qui le garde :
+ *      la planète filaire, la nébuleuse et les étoiles SONT l'identité du jeu.
+ *      Les masquer — ce qui a été fait — donnait l'impression d'un autre jeu.
+ *   3. LE HUD EST COMMUN AUX DEUX CAMÉRAS. Score, vies, barre du boss et
+ *      bannière de stage se lisent en perspective comme à plat.
+ *   4. AUCUN ART INVENTÉ : ni sprite, ni grille au sol, ni jauge de boss
+ *      fabriquée par la vue. Rien qui n'existe pas déjà dans l'autre caméra.
  *
- * Il vérifie aussi la promesse de fond : la vue ne change QUE la présentation —
- * l'instantané qu'elle reçoit ne contient que des références vers l'état vivant
- * du jeu, jamais de copie, et la bascule est mémorisée dans le profil.
+ * Les régressions qui ont réellement coûté cher :
+ *   - la branche de vue placée APRÈS `drawStars()` : le décor recouvrait la vue ;
+ *   - puis l'inverse : le décor purement SUPPRIMÉ, d'où un fond noir ;
+ *   - et des sprites à la place de l'art du jeu, jugés « moches et pas fidèles ».
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
 const read = (rel) => readFileSync(new URL(`../${rel}`, import.meta.url), 'utf8');
+const game = () => read('js/game.js');
+const module3d = () => read('js/render/game3d.js');
 
-test('la vue en perspective est composée AVANT le décor céleste', () => {
-  const game = read('js/game.js');
-  const vue = game.indexOf('if (viewBlend > 0.001 && gameState');
-  const decor = game.indexOf('if (typeof drawStars === \'function\') drawStars();');
-  assert.ok(vue > 0, 'la branche de vue doit exister');
-  assert.ok(decor > 0, 'l’appel au décor doit exister');
-  assert.ok(vue < decor,
-    'la vue doit être composée AVANT drawStars, sinon le décor la recouvre ' +
-    '(c’est l’erreur qui donnait un fond bleu plein écran)');
+/** Le corps de `drawStagePerspective`, borné par la fonction suivante. */
+function blocPerspective() {
+  const g = game();
+  return g.slice(g.indexOf('function drawStagePerspective()'), g.indexOf('function drawScene()'));
+}
+
+test('le décor céleste est peint AVANT la vue, et la vue le GARDE', () => {
+  const g = game();
+  const branche = g.indexOf('if (viewBlend > 0.001 && gameState');
+  const decor = g.indexOf('if (typeof drawStars === \'function\') drawStars();', branche);
+  const projection = g.indexOf('if (drawStagePerspective())', branche);
+
+  assert.ok(branche > 0, 'la branche de vue doit exister');
+  assert.ok(decor > branche, 'la branche de vue doit peindre le décor céleste');
+  assert.ok(projection > decor,
+    'le décor doit être peint AVANT la vue : c’est le fond sur lequel elle se pose');
+  assert.doesNotMatch(g, /BACKDROP\.setViewDim/,
+    'le décor ne doit plus être atténué pour la vue en perspective : il est le MÊME ciel');
 });
 
-test('un rendu 3D indisponible ramène à la vue à plat au lieu d’un écran vide', () => {
-  const game = read('js/game.js');
-  assert.match(game, /GAME3D\.isAvailable/, 'la disponibilité doit être testée');
-  assert.match(game, /viewMode = 'flat';/, 'la vue doit se replier');
-  assert.match(game, /hudAlert\('VUE EN PERSPECTIVE INDISPONIBLE'/,
+test('le HUD est commun aux DEUX caméras', () => {
+  const g = game();
+  assert.match(g, /function drawFixedOverlay\(\)/,
+    'la surcouche fixe doit être une fonction partagée, pas un bloc recopié');
+  // La surcouche est appelée par la BRANCHE de vue (juste après la projection) :
+  // c'est `drawScene` qui l'enchaîne, pas `drawStagePerspective` elle-même.
+  const apresProjection = g.slice(g.indexOf('if (drawStagePerspective())'));
+  assert.match(apresProjection.slice(0, 300), /drawFixedOverlay\(\)/,
+    'la vue en perspective doit la dessiner : sans elle, ni score ni vies — un autre jeu');
+
+  // Et la vue à plat doit continuer de s'en servir (une seule vérité).
+  const scene = g.slice(g.indexOf('function drawScene()'));
+  assert.match(scene, /drawFixedOverlay\(\)/, 'la vue à plat doit passer par la même surcouche');
+});
+
+test('la vue en perspective est composée DANS le tampon émissif', () => {
+  const bloc = blocPerspective();
+  // Composée dans `ctx`, donc bloom, aberration et vignette du mode classique
+  // s'appliquent — c'est ce qui préserve l'ambiance.
+  assert.match(bloc, /GAME3D\.drawWorld\(ctx\)/, 'la vue doit laisser le jeu tracer dans la scène');
+  assert.match(bloc, /const place = \(c\) =>/, 'la transformation de bascule doit être partagée');
+});
+
+test('une transition de stage se voit dans les deux caméras', () => {
+  const g = game();
+  const transition = g.indexOf('if (stageSystem.transitionActive)');
+  const branche = g.indexOf('if (viewBlend > 0.001 && gameState');
+  assert.ok(transition > 0 && branche > 0);
+  assert.ok(transition < branche,
+    'la transition est une annonce de jeu : placée après, la vue en perspective la sautait');
+});
+
+test('la vue ne peut plus être indisponible : elle ne dépend d’aucun rendu matériel', () => {
+  assert.match(module3d(), /isAvailable: \(\) => true/,
+    'la projection sténopé est écrite ici : il n’y a plus de dépendance WebGL à tester');
+
+  // Le repli défensif reste : si la projection échouait, l'écran ne doit pas
+  // rester vide, et le joueur doit savoir pourquoi.
+  const g = game();
+  assert.match(g, /viewMode = 'flat';/, 'la vue doit pouvoir se replier');
+  assert.match(g, /hudAlert\('VUE EN PERSPECTIVE INDISPONIBLE'/,
     'le repli doit être annoncé, pas subi en silence');
 });
 
 test('l’instantané ne copie rien : il référence l’état vivant du jeu', () => {
-  const snapshot = read('js/game.js').slice(
-    read('js/game.js').indexOf('function stageSnapshot()'),
-    read('js/game.js').indexOf('/** Compose la vue en perspective')
-  );
+  const g = game();
+  const snapshot = g.slice(g.indexOf('function stageSnapshot()'), g.indexOf('/** Compose la vue en perspective'));
   assert.ok(snapshot.length > 0, 'l’instantané doit être trouvable');
 
   // Des références directes : la vue lit la simulation, elle ne la duplique pas.
@@ -57,21 +107,69 @@ test('l’instantané ne copie rien : il référence l’état vivant du jeu', (
     'aucune mutation : la vue ne simule rien');
 });
 
+test('tout ce qui se dessine en jeu est transporté par l’instantané', () => {
+  const g = game();
+  const snapshot = g.slice(g.indexOf('function stageSnapshot()'), g.indexOf('/** Compose la vue en perspective'));
+
+  // Les effets font partie de la grammaire du jeu : les omettre en perspective
+  // ferait une vue INCOMPLÈTE, donc un autre jeu.
+  for (const champ of ['enemyBullets', 'powerUps', 'explosions', 'debris', 'bombWaves',
+    'powerUpPickups', 'multiplierSparks', 'scorePopups', 'boss']) {
+    assert.ok(snapshot.includes(champ + ':'), `l’instantané doit porter ${champ}`);
+  }
+
+  // Et la vue doit tous les projeter.
+  const m = module3d();
+  for (const marqueur of ['enemies', 'shots', 'incoming', 'powerups', 'explosions',
+    'debris', 'bombWaves', 'pickups', 'sparks', 'popups', 'boss', 'ship']) {
+    assert.match(m, new RegExp(marqueur + ':'), `le marqueur « ${marqueur} » doit être projeté`);
+  }
+});
+
+test('AUCUN art inventé : ni sprite, ni sol, ni jauge fabriquée', () => {
+  const m = module3d();
+  assert.doesNotMatch(m, /Sprite|CanvasTexture|GridHelper|PlaneGeometry|import \* as THREE/,
+    'la vue ne possède plus aucun objet de scène : elle projette');
+
+  // L'art vient du jeu, nommément.
+  for (const nom of ['drawEnemyShip', 'drawPlayer', 'drawEnemyBullet', 'drawPowerUp',
+    'drawPlayerBullet', 'drawExplosionParticle', 'drawBombWave', 'BOSS.drawWorld']) {
+    assert.ok(m.includes(nom), `la vue doit passer par ${nom}`);
+  }
+
+  // La vue ne trace RIEN elle-même : aucun appel direct à NEON dans la
+  // composition de la bascule. Les seuls tracés sont ceux du jeu.
+  assert.doesNotMatch(blocPerspective(), /NEON\./,
+    'la vue ne redessine pas : elle laisse le jeu dessiner');
+});
+
+test('le boss est rendu par le module boss, pas réinterprété', () => {
+  const boss = read('js/entities/boss.js');
+  assert.match(boss, /viewport: viewport/, 'le boss doit exposer viewport()');
+  assert.match(boss, /BOSS3D\.frame\(viewport\(\)\)/,
+    'le rendu de sa coque doit passer par le MÊME contrat, pas une copie');
+
+  const m = module3d();
+  assert.match(m, /BOSS\.drawWorld/, 'la vue doit confier le boss au module boss');
+  assert.doesNotMatch(blocPerspective(), /NEON\.ring|NEON\.dot|boss\.shell/,
+    'la vue ne doit plus fabriquer d’anneau de cible ni de jauge : le boss se dessine lui-même');
+});
+
 test('la bascule est un plan de caméra animé, pas un simple fondu', () => {
-  const game = read('js/game.js');
-  assert.match(game, /VIEW_BLEND_MS\s*=\s*\d+/, 'la durée doit être nommée et réglable');
-  assert.match(game, /function updateViewBlend/, 'l’animation doit avoir son avance');
+  const g = game();
+  assert.match(g, /VIEW_BLEND_MS\s*=\s*\d+/, 'la durée doit être nommée et réglable');
+  assert.match(g, /function updateViewBlend/, 'l’animation doit avoir son avance');
   // Le mouvement : l'image arrive de plus haut et se pose.
-  assert.match(game, /const chute = \(1 - t\) \*/, 'la bascule doit comporter un mouvement');
-  assert.match(game, /const zoom = 1 \+ \(1 - t\) \*/, 'et une arrivée en profondeur');
-  // Le repère de hitbox subit la même transformation que l'image.
-  assert.match(game, /const place = \(c\) =>/, 'la transformation doit être partagée');
+  assert.match(g, /const chute = \(1 - t\) \*/, 'la bascule doit comporter un mouvement');
+  assert.match(g, /const zoom = 1 \+ \(1 - t\) \*/, 'et une arrivée en profondeur');
+  // Le monde se matérialise, sans tampon intermédiaire.
+  assert.match(g, /ctx\.fillRect\(-64, -64,/, 'la matérialisation doit être une simple passe');
 });
 
 test('le point de vue est mémorisé et restauré', () => {
-  const game = read('js/game.js');
-  assert.match(game, /profile\.setViewMode\(viewMode\)/, 'la bascule doit être mémorisée');
-  assert.match(game, /profile\.data\.viewMode/, 'la préférence doit être relue');
+  const g = game();
+  assert.match(g, /profile\.setViewMode\(viewMode\)/, 'la bascule doit être mémorisée');
+  assert.match(g, /profile\.data\.viewMode/, 'la préférence doit être relue');
 
   const profile = read('js/core/profile-store.js');
   assert.match(profile, /viewMode: 'flat'/, 'un défaut doit exister');
@@ -79,64 +177,18 @@ test('le point de vue est mémorisé et restauré', () => {
   assert.match(profile, /setViewMode\(mode\)/, 'le profil doit exposer un setter');
 });
 
-test('les éléments de jeu à voir sont projetés : bonus et explosions', () => {
-  const module3d = read('js/render/game3d.js');
-  for (const marqueur of ['enemies', 'powerups', 'explosions', 'boss', 'ship']) {
-    assert.match(module3d, new RegExp(marqueur + ':'), `le marqueur « ${marqueur} » doit être projeté`);
-  }
+test('l’art unitaire est exposé par les modules d’entités', () => {
+  // La vue projette CHAQUE élément à sa propre profondeur : il lui faut donc le
+  // tracé unitaire, et pas seulement la passe complète (qui dessine tout le
+  // monde dans le même repère).
+  assert.match(read('js/entities/enemies.js'), /window\.drawEnemyShip = drawEnemyShip/);
+  assert.match(read('js/entities/player.js'), /window\.drawPlayer = drawPlayer/);
+  assert.match(read('js/entities/projectiles.js'), /window\.drawPlayerBullet = drawPlayerBullet/);
+  assert.match(read('js/entities/projectiles.js'), /window\.drawEnemyBullet = drawEnemyBullet/);
+  assert.match(read('js/entities/powerups.js'), /window\.drawPowerUp = drawPowerUp/);
 
-  const game = read('js/game.js');
-  // Chaque marqueur doit être TRACÉ, sinon le calcul ne sert à rien.
-  assert.match(game, /result\.markers && result\.markers\.powerups/, 'les bonus doivent être tracés');
-  assert.match(game, /result\.markers && result\.markers\.explosions/, 'les explosions doivent être tracées');
-  assert.match(game, /result\.markers\.boss|markers && result\.markers\.boss/, 'le boss doit être tracé');
-
-  // Et l'instantané doit transporter les sources correspondantes.
-  const snapshot = read('js/game.js').slice(
-    read('js/game.js').indexOf('function stageSnapshot()'),
-    read('js/game.js').indexOf('/** Compose la vue en perspective')
-  );
-  for (const champ of ['enemyBullets', 'powerUps', 'explosions', 'boss']) {
-    assert.ok(snapshot.includes(champ + ':'), `l’instantané doit porter ${champ}`);
-  }
-});
-
-test('le boss expose son contrat de coque 3D, et la vue s’y branche', () => {
-  const boss = read('js/entities/boss.js');
-
-  // C'est le module boss qui possède ce contrat : les autres vues ne doivent
-  // pas recalculer des dimensions qu'elles ne connaissent pas.
-  assert.match(boss, /viewport: viewport/, 'le boss doit exposer viewport()');
-  const contrat = boss.slice(boss.indexOf('function viewport()'), boss.indexOf('function dessinerCoque3D'));
-  for (const champ of ['width', 'height', 'x', 'y', 'radius', 'angle', 'phase', 'parts']) {
-    assert.ok(contrat.includes(champ + ':'), `le contrat doit porter ${champ}`);
-  }
-  // Le rendu 2D de la coque doit passer par le MÊME contrat : une seule vérité.
-  assert.match(boss, /BOSS3D\.frame\(viewport\(\)\)/,
-    'le rendu 2D de la coque doit utiliser viewport(), pas une copie');
-
-  const game = read('js/game.js');
-  assert.match(game, /BOSS\.viewport\(\)/, 'la vue doit demander le contrat au boss');
-  assert.match(game, /BOSS3D\.frame\(BOSS\.viewport\(\)\)/, 'et lui faire rendre la coque');
-
-  // La vue doit préférer la coque et retomber sur un repère sinon.
-  assert.match(read('js/render/game3d.js'), /b\.shell/, 'la vue doit utiliser la coque');
-  assert.match(game, /if \(boss\.shell\)/, 'et adapter son tracé selon sa présence');
-});
-
-test('le rendu 3D entre dans le même pipeline néon que la vue à plat', () => {
-  const game = read('js/game.js');
-  const draw = game.slice(
-    game.indexOf('function drawStagePerspective()'),
-    game.indexOf('function drawScene()')
-  );
-  // Composé DANS le tampon émissif (`ctx`), donc bloom, aberration et vignette
-  // du mode classique s'appliquent — c'est ce qui préserve l'ambiance.
-  assert.match(draw, /ctx\.drawImage\(result\.canvas/, 'la vue doit être composée dans la scène');
-  assert.match(draw, /'source-over'/, 'composition normale, pas un mélange additif global');
-
-  const module3d = read('js/render/game3d.js');
-  // L'art vient du jeu : on ne redessine pas les vaisseaux.
-  assert.match(module3d, /drawEnemyBillboard/, 'les ennemis doivent venir de l’art du jeu');
-  assert.match(module3d, /drawClassicPlayerHull|SHIP_RENDERERS/, 'la coque doit venir du jeu');
+  // Et la passe complète doit continuer de n'être qu'une boucle sur l'unitaire :
+  // une seule vérité de tracé, donc aucun risque de divergence entre les vues.
+  assert.match(read('js/entities/projectiles.js'), /drawPlayerBullets\(\)[\s\S]{0,200}drawPlayerBullet\(c, tr,/);
+  assert.match(read('js/entities/powerups.js'), /function drawPowerUps\(\)[\s\S]{0,300}drawPowerUp\(c, tr,/);
 });

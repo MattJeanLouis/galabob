@@ -1276,34 +1276,22 @@ function draw() {
 }
 
 /**
- * Ce que la vue en perspective a besoin de savoir du boss : où il est, et sa
- * coque 3D déjà rendue. C'est le module boss qui la rend (`viewport()`), donc
- * c'est le MÊME art que la vue à plat — simplement projeté.
+ * Ce que la vue en perspective a besoin de savoir du boss : OÙ il est, et sa
+ * vie. Rien de plus — sa coque volumique est rendue par le module boss lui-même
+ * (`BOSS.drawWorld`), donc c'est le MÊME art que dans la vue à plat, simplement
+ * projeté. La vue n'a pas à connaître ses dimensions.
  */
 function bossViewSnapshot() {
   if (typeof BOSS === 'undefined' || !BOSS || !BOSS.isActive || !BOSS.isActive()) return null;
   const etat = BOSS._state || {};
-  const vue = {
+  return {
     x: etat.x == null ? CANVAS_WIDTH / 2 : etat.x,
     y: etat.y == null ? 120 : etat.y,
     rayon: etat.rayon == null ? 90 : etat.rayon,
     hp: (typeof BOSS.getHpFraction === 'function') ? BOSS.getHpFraction() : 1,
     color: (typeof BOSS.getColor === 'function') ? BOSS.getColor() : null,
-    phase: (typeof BOSS.getPhase === 'function') ? BOSS.getPhase() : 1,
-    shell: null, alpha: 1
+    phase: (typeof BOSS.getPhase === 'function') ? BOSS.getPhase() : 1
   };
-  try {
-    if (typeof BOSS.viewport === 'function' && typeof BOSS3D !== 'undefined' &&
-        BOSS3D && typeof BOSS3D.frame === 'function') {
-      const coque = BOSS3D.frame(BOSS.viewport());
-      if (coque && coque.canvas) {
-        vue.shell = coque.canvas;
-        vue.alpha = coque.alpha == null ? 1 : coque.alpha;
-        vue.scale = coque.scale == null ? 1 : coque.scale;
-      }
-    }
-  } catch (e) { /* la coque est un bonus : son absence ne casse pas la vue */ }
-  return vue;
 }
 
 /**
@@ -1325,6 +1313,15 @@ function stageSnapshot() {
     // Les impacts doivent se produire LÀ OÙ ils ont lieu : sans eux, une
     // destruction lointaine ne se lisait pas.
     explosions: (typeof explosions !== 'undefined') ? explosions : [],
+    // Les effets de sol font partie de la grammaire du jeu : la gerbe de débris,
+    // le souffle de la bombe, le retour de ramassage, le « ×2 » du multiplicateur
+    // et le « +500 » du score. En perspective ils se projettent comme le reste —
+    // les omettre ferait une vue incomplète, donc une autre jeu.
+    debris: (typeof debris !== 'undefined') ? debris : [],
+    bombWaves: (typeof bombWaves !== 'undefined') ? bombWaves : [],
+    powerUpPickups: (typeof powerUpPickups !== 'undefined') ? powerUpPickups : [],
+    multiplierSparks: (typeof multiplierSparks !== 'undefined') ? multiplierSparks : [],
+    scorePopups: (typeof scorePopups !== 'undefined') ? scorePopups : [],
     // Le boss : sa position et sa vie, pour qu'il soit localisable en
     // perspective. `_state` est l'introspection officielle du module boss.
     boss: bossViewSnapshot(),
@@ -1333,21 +1330,24 @@ function stageSnapshot() {
   };
 }
 
-/** Compose la vue en perspective des stages 2D dans le buffer émissif.
- *  @returns {boolean} false si le rendu 3D est indisponible — la boucle repasse
- *  alors en vue à plat, sinon l'écran resterait vide. */
+/** Compose la vue en perspective des stages 2D dans le tampon émissif.
+ *
+ *  La vue n'invente aucun art : elle laisse le JEU dessiner ses propres formes
+ *  (`GAME3D.drawWorld`), simplement à la position et à l'échelle que la caméra
+ *  leur donne. C'est ce qui la rend fidèle — un tracé néon garde son halo, ses
+ *  passes additives et sa couleur, parce que c'est le même appel de fonction.
+ *
+ *  @returns {boolean} false si la projection est indisponible — la boucle
+ *  repasse alors en vue à plat, sinon l'écran resterait vide. */
 function drawStagePerspective() {
   const result = (typeof GAME3D !== 'undefined' && typeof GAME3D.frame === 'function')
     ? GAME3D.frame(stageSnapshot(), CANVAS_WIDTH, CANVAS_HEIGHT)
     : null;
-  if (!result || !result.canvas) return false;
+  if (!result || !result.markers) return false;
 
-  // Le canvas 3D entre dans la MÊME scène émissive que la vue à plat : c'est ce
-  // qui lui donne le bloom, l'aberration et la vignette du mode classique.
-  //
   // BASCULE = PLAN DE CAMÉRA, pas un simple fondu. Pendant l'animation, l'image
-  // arrive de plus haut et légèrement plus large, puis se pose : on lit un
-  // mouvement de caméra qui se place derrière le vaisseau, pas une dissolution.
+  // arrive de plus haut et légèrement plus large, puis elle se pose : on lit un
+  // mouvement de caméra qui vient se placer derrière le vaisseau.
   const t = Math.max(0, Math.min(1, viewBlend));
   const chute = (1 - t) * 90;                 // px : la caméra descend se poser
   const zoom = 1 + (1 - t) * 0.10;            // elle arrive d'un peu plus loin
@@ -1359,92 +1359,19 @@ function drawStagePerspective() {
   };
 
   ctx.save();
-  ctx.globalCompositeOperation = 'source-over';
-  ctx.globalAlpha = t;
   place(ctx);
-  ctx.drawImage(result.canvas, 0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+  try { GAME3D.drawWorld(ctx); } catch (e) { console.error('Erreur drawWorld :', e); }
   ctx.restore();
 
-  // --- BOSS : anneau de cible et jauge de vie, à sa position projetée ------
-  // Il n'est pas encore coiffé de sa coque 3D : il est LOCALISABLE et sa vie
-  // se lit, ce qui est le minimum pour se battre. La coque viendra ensuite.
-  const boss = result.markers && result.markers.boss;
-  if (boss && typeof NEON !== 'undefined') {
+  // Le monde se matérialise : une seule passe pleine taille, pas de tampon
+  // intermédiaire. Débordante de 64 px pour couvrir le tremblement d'écran,
+  // qui décale `ctx` sous nos pieds.
+  if (t < 1) {
     ctx.save();
-    place(ctx);
-    const cle = boss.color || 'enemyElite';
-    if (boss.shell) {
-      // La coque 3D est affichée : on n'ajoute QUE la jauge de vie, sinon les
-      // cercles se battraient avec elle. Le pourtour suffit à lire la vie.
-      const arc = Math.max(0.02, boss.hp);
-      NEON.ring(ctx, boss.x, boss.y, boss.r * 1.12, 2.4, 'danger',
-        { alpha: 0.34 * t, passes: 2, composite: 'lighter' });
-      NEON.ring(ctx, boss.x, boss.y, boss.r * 1.12, 2.6, 'playerCore',
-        { alpha: 0.7 * t, dash: [arc * 160, 999], dashOffset: -40, passes: 3, composite: 'lighter' });
-    } else {
-      // Sans coque, il faut au moins une silhouette lisible.
-      NEON.ring(ctx, boss.x, boss.y, boss.r, 1.6, cle,
-        { alpha: 0.42 * t, dash: [7, 5], passes: 2, composite: 'lighter' });
-      NEON.ring(ctx, boss.x, boss.y, boss.r * 0.82, 2.6, 'danger',
-        { alpha: 0.75 * t, passes: 3, composite: 'lighter' });
-      const arc = Math.max(0.02, boss.hp);
-      NEON.ring(ctx, boss.x, boss.y, boss.r * 1.12, 2.2, 'playerCore',
-        { alpha: 0.6 * t, dash: [arc * 160, 999], dashOffset: -40, passes: 2, composite: 'lighter' });
-      NEON.dot(ctx, boss.x, boss.y, Math.max(3, boss.r * 0.14), cle,
-        { alpha: 0.85 * t, glowScale: 0.5, passes: 2 });
-    }
-    ctx.restore();
-  }
-
-  // --- EXPLOSIONS : les impacts se produisent LÀ OÙ ils ont lieu -----------
-  // Même grammaire que la vue à plat (halo additif), mais à la position
-  // projetée : une destruction lointaine se lit enfin.
-  const impacts = (result.markers && result.markers.explosions) || [];
-  if (impacts.length && typeof NEON !== 'undefined') {
-    ctx.save();
-    place(ctx);
-    for (const f of impacts) {
-      const rayon = Math.max(3, Math.min(90, f.r || 4));
-      const couleur = f.color || 'enemyNormal';
-      NEON.dot(ctx, f.x, f.y, rayon * 0.5, couleur,
-        { alpha: 0.55 * f.alpha * t, glowScale: 0.9, passes: 2, composite: 'lighter' });
-      NEON.ring(ctx, f.x, f.y, rayon, Math.max(1, rayon * 0.12), couleur,
-        { alpha: 0.5 * f.alpha * t, passes: 2, composite: 'lighter' });
-    }
-    ctx.restore();
-  }
-
-  // --- BONUS : même grammaire que la vue à plat, projetée -------------------
-  // Le sprite 3D n'existe pas pour les bonus : on les trace en néon à leur
-  // position projetée, dans la couleur de leur famille. Ils restent donc
-  // identifiables au premier coup d'œil, comme dans le mode classique.
-  const pickups = (result.markers && result.markers.powerups) || [];
-  if (pickups.length && typeof NEON !== 'undefined') {
-    ctx.save();
-    place(ctx);
-    for (const p of pickups) {
-      const cle = 'powerup.' + (p.type || 'double');
-      const taille = Math.max(7, Math.min(26, (p.scale || 1) * 30));
-      const pulse = Math.sin((FRAME.time * 6) + p.x * 0.01) * 0.16;
-      NEON.ring(ctx, p.x, p.y, taille + pulse * 10, 1.3, cle,
-        { alpha: 0.55 * t, dash: [5, 4], passes: 2 });
-      NEON.dot(ctx, p.x, p.y, Math.max(2.2, taille * 0.28), cle,
-        { alpha: 0.9 * t, glowScale: 0.5, passes: 2 });
-    }
-    ctx.restore();
-  }
-
-  // Le vaisseau est marqué d'un noyau blanc : sa VRAIE hitbox, identique à
-  // celle de la vue à plat. Le joueur doit pouvoir lire son esquive partout.
-  // Le repère subit la MÊME transformation que l'image, sinon il se détache.
-  const marker = result.markers && result.markers.ship;
-  if (marker && marker.visible && typeof NEON !== 'undefined') {
-    ctx.save();
-    place(ctx);
-    NEON.dot(ctx, marker.x, marker.y, 2.4, 'playerCore',
-      { alpha: 0.85 * t, glowScale: 0.35, passes: 2 });
-    NEON.ring(ctx, marker.x, marker.y, 9, 1.1, 'player',
-      { alpha: 0.42 * t, dash: [3, 5], passes: 2 });
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1 - t;
+    ctx.fillStyle = '#000000';
+    ctx.fillRect(-64, -64, CANVAS_WIDTH + 128, CANVAS_HEIGHT + 128);
     ctx.restore();
   }
   return true;
@@ -1452,32 +1379,10 @@ function drawStagePerspective() {
 
 /** Tout le contenu de la scène. `ctx` pointe ici sur le buffer émissif. */
 function drawScene() {
-  // --- VUE EN PERSPECTIVE ---------------------------------------------------
-  // Placée AVANT le décor et les étoiles : c'est l'erreur qui donnait un fond
-  // bleu. `drawStars()` peint le ciel 2D ; en perspective il ne doit pas être
-  // peint du tout, sinon il recouvre la vue 3D (qui a son propre fond).
-  if (viewBlend > 0.001 && gameState === 'playing') {
-    const troisDPrete = typeof GAME3D !== 'undefined' &&
-      typeof GAME3D.isAvailable === 'function' && GAME3D.isAvailable();
-    if (troisDPrete && drawStagePerspective()) return;
-    if (!troisDPrete) {
-      // Rendu indisponible : on repasse à la vue à plat plutôt que de laisser
-      // un écran vide, et on annonce pourquoi.
-      viewMode = 'flat';
-      viewBlend = 0;
-      if (typeof BACKDROP !== 'undefined' && BACKDROP && typeof BACKDROP.setViewDim === 'function') {
-        try { BACKDROP.setViewDim(1); } catch (e) { /* ignoré */ }
-      }
-      try {
-        const why = GAME3D.failureReason ? GAME3D.failureReason() : null;
-        if (typeof hudAlert === 'function') {
-          hudAlert('VUE EN PERSPECTIVE INDISPONIBLE', why ? String(why).slice(0, 60) : 'WEBGL REQUIS', '#ff2b55', 2200);
-        }
-      } catch (e) { /* l'annonce ne doit jamais bloquer le rendu */ }
-    }
-  }
-
   // --- transition de stage -------------------------------------------------
+  // AVANT la vue en perspective : une transition est une annonce de jeu, elle
+  // doit se voir dans les DEUX caméras. Placée après, la vue en perspective la
+  // sautait purement et simplement.
   if (stageSystem.transitionActive) {
     try {
       stageSystem.drawTransition();
@@ -1485,6 +1390,41 @@ function drawScene() {
       console.error("Erreur lors du rendu de la transition :", e);
     }
     return;
+  }
+
+  // --- VUE EN PERSPECTIVE ---------------------------------------------------
+  // Le décor céleste est peint D'ABORD, et la vue le garde : la planète filaire,
+  // la nébuleuse et les étoiles SONT l'identité du jeu. La vue en perspective
+  // regarde le MÊME ciel sous un autre angle — elle n'en invente pas un second
+  // (c'est l'erreur qui donnait l'impression d'un autre jeu).
+  if (viewBlend > 0.001 && gameState === 'playing') {
+    try {
+      if (typeof drawStars === 'function') drawStars();
+    } catch (e) {
+      console.error("Erreur lors du dessin des étoiles :", e);
+    }
+    if (drawStagePerspective()) {
+      // Le HUD est COMMUN aux deux caméras : score, vies, barre du boss et
+      // bannière de stage doivent se lire en perspective comme à plat.
+      drawFixedOverlay();
+      return;
+    }
+    // La projection a échoué : on repasse à la vue à plat plutôt que de laisser
+    // un écran vide, et on annonce pourquoi.
+    viewMode = 'flat';
+    viewBlend = 0;
+    try {
+      if (typeof hudAlert === 'function') {
+        hudAlert('VUE EN PERSPECTIVE INDISPONIBLE', 'PROJECTION IMPOSSIBLE', '#ff2b55', 2200);
+      }
+    } catch (e) { /* l'annonce ne doit jamais bloquer le rendu */ }
+  }
+
+  // --- fond étoilé ---------------------------------------------------------
+  try {
+    if (typeof drawStars === 'function') drawStars();
+  } catch (e) {
+    console.error("Erreur lors du dessin des étoiles :", e);
   }
 
   if (gameState === 'transit') {
@@ -1559,15 +1499,26 @@ function drawScene() {
   if (typeof drawScorePopups === 'function') {
     try { drawScorePopups(); } catch (e) { console.error("Erreur drawScorePopups :", e); }
   }
-  /* --- surcouche FIXE : HUD et menu pause ---------------------------------
-   *  Le HUD sort de la caméra de JUICE. Il était jusqu'ici dessiné DANS la
-   *  transformation de screenshake : sur une grosse explosion, le décalage
-   *  poussait les éléments de bord hors de l'écran — « SCORE » amputé de son
-   *  S, « MEILLEUR » de son M, le badge de chaîne coupé par le bord gauche.
-   *  Ça ne se lit pas comme de l'impact, ça se lit comme un bug d'affichage.
-   *  L'écran continue de trembler ; les repères, eux, restent d'aplomb.
-   *  (Bonus : les zones cliquables du menu pause sont enfin enregistrées aux
-   *   coordonnées réelles de la souris, et non aux coordonnées secouées.)   */
+  /* --- surcouche FIXE : HUD et menu pause --------------------------------- */
+  drawFixedOverlay();
+}
+
+/** Surcouche FIXE : HUD, barre et bannière du boss, menu pause.
+ *
+ *  Le HUD sort de la caméra de JUICE. Il était jusqu'ici dessiné DANS la
+ *  transformation de screenshake : sur une grosse explosion, le décalage
+ *  poussait les éléments de bord hors de l'écran — « SCORE » amputé de son S,
+ *  « MEILLEUR » de son M, le badge de chaîne coupé par le bord gauche. Ça ne se
+ *  lit pas comme de l'impact, ça se lit comme un bug d'affichage. L'écran
+ *  continue de trembler ; les repères, eux, restent d'aplomb.
+ *  (Bonus : les zones cliquables du menu pause sont enfin enregistrées aux
+ *   coordonnées réelles de la souris, et non aux coordonnées secouées.)
+ *
+ *  ELLE EST PARTAGÉE PAR LES DEUX CAMÉRAS : les deux regardent le même stage,
+ *  elles doivent donc annoncer le même score, les mêmes vies et le même boss.
+ *  Réservée à la vue à plat, elle disparaissait en perspective — ce qui
+ *  contribuait beaucoup à l'impression d'un autre jeu. */
+function drawFixedOverlay() {
   const _cam = ctx.getTransform ? ctx.getTransform() : null;
   ctx.save();
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);

@@ -218,55 +218,101 @@ function _bulletTrailCtx() {
   return NEON.trail;
 }
 
+/** UN projectile du joueur. Extrait de la passe pour que la vue en perspective
+ *  puisse le tracer à SA profondeur : un tir lointain et un tir au contact ne
+ *  peuvent pas partager la même échelle. */
+function drawPlayerBullet(c, tr, b) {
+  if (!c || !b) return;
+  const key = PALETTE.weapon(b.weapon || 'normal');
+  const h = b.drawH || TEMPO.PLAYER_BULLET_H;
+  const w = b.width || TEMPO.PLAYER_BULLET_W;
+  const cx = b.x + w / 2;
+
+  // Naissance : la balle jaillit un peu plus large et plus lumineuse.
+  const birth = b.age < 55 ? 1 - b.age / 55 : 0;
+
+  // Traînée persistante : le chemin exact parcouru depuis la frame d'avant.
+  if (tr) {
+    const st = _trailStep();
+    NEON.line(tr, cx, b.y + h, cx - (b.vx || 0) * st, b.y + h - (b.vy || 0) * st, key, 2.0, {
+      alpha: 0.38, passes: 2, composite: 'lighter'
+    });
+  }
+
+  // Sillage court dans la scène : c'est lui qui donne la LONGUEUR, la
+  // lecture d'une lance et non d'une bille.
+  NEON.line(c, cx - b.vx * 0.004, b.y + h * 0.8, cx - b.vx * 0.013, b.y + h + 13,
+            key, 1.5, { alpha: 0.30, passes: 2, composite: 'lighter' });
+
+  // Corps : capsule néon (halo coloré + noyau quasi blanc).
+  NEON.beam(c, b.x - birth * 0.5, b.y, w + birth, h, key, {
+    alpha: 1,
+    glowScale: 0.72 + birth * 0.35,
+    composite: 'lighter',
+    passes: 3
+  });
+
+  // Épine blanche : le noyau net qui survit au bloom.
+  NEON.line(c, cx, b.y + 2, cx, b.y + h - 2, 'playerCore', 0.8,
+            { alpha: 0.9, passes: 2, halo: false, composite: 'lighter' });
+
+  // Éclat de naissance — discret : une salve 'spread' en fait naître sept
+  // au même endroit, et le rendu est additif.
+  if (birth > 0.3) {
+    NEON.ring(c, cx, b.y + h * 0.5, 3 + (1 - birth) * 12, 1.1, key,
+              { alpha: (birth - 0.3) * 0.42, passes: 3 });
+  }
+}
+
 /** Projectiles du joueur : capsule fine, noyau blanc, traînée, flash de naissance. */
 function drawPlayerBullets() {
   const c = ctx;
   const tr = _bulletTrailCtx();
 
   for (let i = 0; i < playerBullets.length; i++) {
-    const b = playerBullets[i];
-    if (!b) continue;
-
-    const key = PALETTE.weapon(b.weapon || 'normal');
-    const h = b.drawH || TEMPO.PLAYER_BULLET_H;
-    const w = b.width || TEMPO.PLAYER_BULLET_W;
-    const cx = b.x + w / 2;
-
-    // Naissance : la balle jaillit un peu plus large et plus lumineuse.
-    const birth = b.age < 55 ? 1 - b.age / 55 : 0;
-
-    // Traînée persistante : le chemin exact parcouru depuis la frame d'avant.
-    if (tr) {
-      const st = _trailStep();
-      NEON.line(tr, cx, b.y + h, cx - (b.vx || 0) * st, b.y + h - (b.vy || 0) * st, key, 2.0, {
-        alpha: 0.38, passes: 2, composite: 'lighter'
-      });
-    }
-
-    // Sillage court dans la scène : c'est lui qui donne la LONGUEUR, la
-    // lecture d'une lance et non d'une bille.
-    NEON.line(c, cx - b.vx * 0.004, b.y + h * 0.8, cx - b.vx * 0.013, b.y + h + 13,
-              key, 1.5, { alpha: 0.30, passes: 2, composite: 'lighter' });
-
-    // Corps : capsule néon (halo coloré + noyau quasi blanc).
-    NEON.beam(c, b.x - birth * 0.5, b.y, w + birth, h, key, {
-      alpha: 1,
-      glowScale: 0.72 + birth * 0.35,
-      composite: 'lighter',
-      passes: 3
-    });
-
-    // Épine blanche : le noyau net qui survit au bloom.
-    NEON.line(c, cx, b.y + 2, cx, b.y + h - 2, 'playerCore', 0.8,
-              { alpha: 0.9, passes: 2, halo: false, composite: 'lighter' });
-
-    // Éclat de naissance — discret : une salve 'spread' en fait naître sept
-    // au même endroit, et le rendu est additif.
-    if (birth > 0.3) {
-      NEON.ring(c, cx, b.y + h * 0.5, 3 + (1 - birth) * 12, 1.1, key,
-                { alpha: (birth - 0.3) * 0.42, passes: 3 });
-    }
+    drawPlayerBullet(c, tr, playerBullets[i]);
   }
+}
+
+/** UN projectile ennemi. `rang` ne sert qu'à déphaser l'anneau de menace. */
+function drawEnemyBullet(c, tr, b, rang, t) {
+  if (!c || !b) return;
+  const key = PALETTE.bullet('enemy', b.kind || 'normal');
+  const w = b.width || TEMPO.ENEMY_BULLET_W;
+  const h = b.drawH || b.height || TEMPO.ENEMY_BULLET_H;
+  const cx = b.x + w / 2;
+  const cy = b.y + h / 2;
+  const rx = w * 0.95;
+  const ry = h * 0.62;
+
+  if (tr) {
+    const st = _trailStep();
+    NEON.line(tr, cx, cy, cx - (b.vx || 0) * st, cy - (b.vy || 0) * st, key, 2.2, {
+      alpha: 0.34, passes: 2, composite: 'lighter'
+    });
+  }
+
+  // Losange : pointe en bas (sens de la marche).
+  NEON.shape(c, [
+    cx, cy + ry,
+    cx + rx, cy,
+    cx, cy - ry,
+    cx - rx, cy
+  ], key, 1.8, { alpha: 1, fill: true, fillAlpha: 0.34, glowScale: 1.0,
+                 composite: 'lighter', passes: 3 });
+
+  // Noyau blanc : c'est le point qui tue, il doit rester net dans le bloom.
+  NEON.dot(c, cx, cy, 1.6, 'bulletEnemy', {
+    alpha: 1, glowScale: 0.82, composite: 'lighter'
+  });
+
+  // Anneau de menace, en rotation lente : lisible même sur fond chargé.
+  NEON.ring(c, cx, cy, rx * 1.55, 1.0, key, {
+    alpha: 0.30 + 0.14 * Math.sin((t || 0) * 7 + (rang || 0)),
+    dash: [3, 4],
+    dashOffset: (t || 0) * 22,
+    passes: 2, halo: false, composite: 'lighter'
+  });
 }
 
 /** Projectiles ennemis : losange trapu, halo rouge, anneau tournant.
@@ -277,45 +323,7 @@ function drawEnemyBullets() {
   const t = FRAME.time;
 
   for (let i = 0; i < enemyBullets.length; i++) {
-    const b = enemyBullets[i];
-    if (!b) continue;
-
-    const key = PALETTE.bullet('enemy', b.kind || 'normal');
-    const w = b.width || TEMPO.ENEMY_BULLET_W;
-    const h = b.drawH || b.height || TEMPO.ENEMY_BULLET_H;
-    const cx = b.x + w / 2;
-    const cy = b.y + h / 2;
-    const rx = w * 0.95;
-    const ry = h * 0.62;
-
-    if (tr) {
-      const st = _trailStep();
-      NEON.line(tr, cx, cy, cx - (b.vx || 0) * st, cy - (b.vy || 0) * st, key, 2.2, {
-        alpha: 0.34, passes: 2, composite: 'lighter'
-      });
-    }
-
-    // Losange : pointe en bas (sens de la marche).
-    NEON.shape(c, [
-      cx, cy + ry,
-      cx + rx, cy,
-      cx, cy - ry,
-      cx - rx, cy
-    ], key, 1.8, { alpha: 1, fill: true, fillAlpha: 0.34, glowScale: 1.0,
-                   composite: 'lighter', passes: 3 });
-
-    // Noyau blanc : c'est le point qui tue, il doit rester net dans le bloom.
-    NEON.dot(c, cx, cy, 1.6, 'bulletEnemy', {
-      alpha: 1, glowScale: 0.82, composite: 'lighter'
-    });
-
-    // Anneau de menace, en rotation lente : lisible même sur fond chargé.
-    NEON.ring(c, cx, cy, rx * 1.55, 1.0, key, {
-      alpha: 0.30 + 0.14 * Math.sin(t * 7 + i),
-      dash: [3, 4],
-      dashOffset: t * 22,
-      passes: 2, halo: false, composite: 'lighter'
-    });
+    drawEnemyBullet(c, tr, enemyBullets[i], i, t);
   }
 }
 
@@ -325,3 +333,7 @@ function drawEnemyBullets() {
  * -------------------------------------------------------------------------- */
 window.spawnPlayerBullet = spawnPlayerBullet;
 window.spawnEnemyBullet = spawnEnemyBullet;
+/* Tracé UNITAIRE : la vue en perspective projette chaque projectile à sa propre
+ * profondeur, donc elle a besoin de le tracer seul — pas de la passe complète. */
+window.drawPlayerBullet = drawPlayerBullet;
+window.drawEnemyBullet = drawEnemyBullet;
