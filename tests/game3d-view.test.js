@@ -219,6 +219,34 @@ test('CADRAGE : le vaisseau est DEVANT, bas dans le cadre, à toute taille', () 
   }
 });
 
+test("AVANCER dans le plan RAPPROCHE le monde (monter = vers l'horizon)", () => {
+  const { GAME3D } = charger();
+
+  // La caméra suit le joueur : le vaisseau garde donc sa place à l'écran, et
+  // c'est le MONDE qui défile. C'est le contrat de l'objectif — « monter, c'est
+  // aller vers l'horizon » — et il se lit sur un ennemi FIXE : plus le joueur
+  // monte dans le plan, plus cet ennemi doit être proche (gros, bas, menaçant).
+  const mesures = [];
+  for (const y of [540, 380, 220, 80]) {
+    const snap = instantane();
+    snap.player = { ...snap.player, x: 400, y };
+    snap.enemies = [{ x: 380, y: 300, width: 32, height: 32, type: 'normal' }];
+    snap.playerBullets = []; snap.enemyBullets = []; snap.powerUps = [];
+    snap.explosions = []; snap.boss = null;
+    const m = GAME3D.frame(snap, 800, 600).markers.enemies[0];
+    mesures.push({ y, scale: m.scale, ecran: m.y });
+  }
+
+  for (let i = 1; i < mesures.length; i++) {
+    assert.ok(mesures[i].scale > mesures[i - 1].scale,
+      `monter doit rapprocher l'ennemi fixe : ${mesures[i - 1].scale.toFixed(3)} -> ${mesures[i].scale.toFixed(3)}`);
+  }
+  // Et la progression doit être NETTE, pas cosmétique.
+  const rapport = mesures[mesures.length - 1].scale / mesures[0].scale;
+  assert.ok(rapport > 2,
+    `le déplacement doit changer franchement la distance perçue (mesuré ×${rapport.toFixed(1)})`);
+});
+
 test('CADRAGE : le terrain reste lisible sur les BORDS', () => {
   const { GAME3D } = charger();
 
