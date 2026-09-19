@@ -1,3 +1,35 @@
+/**
+ * ÉTAT ET PISTE (à lire avant de reprendre cette vue)
+ * -----------------------------------------------------------------------------
+ * Le rendu actuel passe par des SPRITES : l'art du jeu rendu dans un canvas,
+ * puis affiché comme image. Le joueur l'a jugé, à juste titre, « moche et pas
+ * fidèle à la vue de base » — et le diagnostic est exact : on a gardé l'ART
+ * mais pas sa MATIÈRE. Un sprite plat n'a ni l'épaisseur ni la lumière des
+ * tracés vectoriels néon multi-passes du mode classique.
+ *
+ * LA PISTE À SUIVRE : projeter les positions, mais laisser LE JEU DESSINER ses
+ * propres formes dans le tampon émissif, avec leur halo et leurs passes :
+ *
+ *     drawEnemyShip(ctx, e, FRAME.time)   (après ensureEnemyRuntime(e))
+ *     drawPlayer()                        (coque, traînées, réacteur)
+ *     BOSS.drawWorld(ctx)                 (via BOSS.viewport() pour l'échelle)
+ *
+ * en transformant le contexte pour chaque entité :
+ *     translate(position projetée) · scale(pixelsParUnite) · translate(-centre logique)
+ *
+ * DEUX PIÈGES DÉJÀ IDENTIFIÉS, à ne pas repayer :
+ *  1. L'ÉCHELLE. La bonne mesure est « pixels par unité du monde » à une
+ *     profondeur donnée : projeter (x, z) et (x + 10, z) et diviser par 10.
+ *     Mesurer un déplacement en PROFONDEUR (l'ancien calcul, + 40 sur z) n'a
+ *     aucun sens et réduisait l'art à presque rien.
+ *  2. `ensureEnemyRuntime(e)` est OBLIGATOIRE avant `drawEnemyShip` : sans lui,
+ *     `e.phase` vaut undefined, la taille devient NaN et l'ennemi n'est pas
+ *     tracé du tout.
+ *
+ * Un troisième défaut n'a PAS été trouvé : la scène restait vide malgré ces
+ * deux corrections. Le rendu actuel par sprites reste en place parce qu'une vue
+ * vide est pire qu'une vue imparfaite — mais c'est un état de transition.
+ */
 import * as THREE from 'three';
 
 /**
