@@ -227,24 +227,11 @@ const GAME3D = (() => {
     shotTexture = textureFrom(canvas);
   }
 
-  /** Le sol : une grille discrète qui donne l'échelle et la profondeur. */
-  function buildGround() {
-    // Grille SOMBRE : ses lignes convergeaient vers l'horizon en s'y
-    // entassant, et le bloom en faisait une nappe cyan qui noyait l'écran.
-    // Elle doit donner l'échelle, pas éclairer.
-    const gris = new THREE.Color('#7f8fa6');
-    const grid = new THREE.GridHelper(GROUND_HALF_WIDTH * 2, 26, gris.clone(), gris.clone());
-    grid.material.transparent = true;
-    grid.material.opacity = 0.045;
-    grid.material.depthWrite = false;
-    grid.scale.z = GROUND_DEPTH / (GROUND_HALF_WIDTH * 2);
-    grid.position.set(0, -1, -GROUND_DEPTH * 0.5);
-    scene.add(grid);
-
-    // PAS de plan de sol : un aplat, même sombre, se lisait comme un dôme gris
-    // en travers de l'écran et noyait le néon. L'espace vide fait mieux
-    // ressortir les vaisseaux — et c'est l'ambiance du mode 2D.
-  }
+  /** AUCUN sol, AUCUNE grille : ces éléments n'existent dans aucune autre vue
+   *  du jeu. Ils ajoutaient un décor étranger — et c'est précisément ce qui
+   *  donnait l'impression d'un AUTRE JEU plutôt que d'un autre point de vue sur
+   *  le même. L'espace du jeu (son décor céleste) suffit à porter la scène. */
+  function buildGround() { /* volontairement vide */ }
 
   /** Le CIEL de la vue en perspective : la planète filaire du jeu.
    *  C'est le MÊME astre que celui du décor 2D (`SPACE3D`, déjà utilisé par

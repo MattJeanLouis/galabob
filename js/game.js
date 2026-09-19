@@ -65,11 +65,11 @@ function updateViewBlend(realDtMs) {
   viewBlend = target > viewBlend
     ? Math.min(target, viewBlend + step)
     : Math.max(target, viewBlend - step);
-  // Le décor céleste s'atténue progressivement : réglé pour la vue à plat, il
-  // devenait un aplat laiteux dès qu'on regardait l'horizon.
-  if (typeof BACKDROP !== 'undefined' && BACKDROP && typeof BACKDROP.setViewDim === 'function') {
-    try { BACKDROP.setViewDim(1 - viewBlend); } catch (e) { /* décor facultatif */ }
-  }
+  // LE CIEL RESTE CELUI DU JEU. L'avoir masqué était une erreur de fond : la
+  // planète filaire, la nébuleuse et les étoiles SONT l'identité du jeu. Sans
+  // elles, la vue donne l'impression d'un autre jeu plutôt que d'une autre
+  // caméra sur le même. On n'y touche plus.
+  void viewBlend;
 }
 
 /** Petit pont de commande, sur le modèle de `window.GALABOB` : il rend la
