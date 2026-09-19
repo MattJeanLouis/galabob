@@ -44,7 +44,7 @@ const GAME3D = (() => {
   // vaisseau reste bas (72 %) ET le bord redevient visible sur 2/3 de sa
   // profondeur. La perspective y gagne aussi en intensité.
   const FOV = 60;
-  const HORIZON = 6000;            // distance du plan de fond
+  const CAM_FAR = 18000;           // plan lointain de la caméra (rien à voir au-delà)
 
   // Ciel : l'astre du jeu, posé loin derrière, rafraîchi une frame sur N.
   const SKY_DISTANCE = 4200;
@@ -71,7 +71,6 @@ const GAME3D = (() => {
   let renderer = null;
   let scene = null;
   let camera = null;
-  let ground = null;
   let sky = null;
   let skyTexture = null;
   let skyFrame = -999;
@@ -93,7 +92,6 @@ const GAME3D = (() => {
   let enemyShotSprites = [];
   let shotTexture = null;
   let enemyShotTextures = {};
-  const temp = new THREE.Vector3();
   let camX = 0;        // position lissée du cadre (retard)
   let camRoll = 0;     // inclinaison lissée
 
@@ -210,7 +208,6 @@ const GAME3D = (() => {
     grid.scale.z = GROUND_DEPTH / (GROUND_HALF_WIDTH * 2);
     grid.position.set(0, -1, -GROUND_DEPTH * 0.5);
     scene.add(grid);
-    ground = grid;
 
     // PAS de plan de sol : un aplat, même sombre, se lisait comme un dôme gris
     // en travers de l'écran et noyait le néon. L'espace vide fait mieux
@@ -280,7 +277,7 @@ const GAME3D = (() => {
       renderer.outputColorSpace = THREE.SRGBColorSpace;
 
       scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(FOV, 1, 1, HORIZON * 3);
+      camera = new THREE.PerspectiveCamera(FOV, 1, 1, CAM_FAR);
 
       buildGround();
       buildSky();
